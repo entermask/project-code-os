@@ -68,6 +68,12 @@ MAX_NEW_TOKENS_SAFETY = float(os.getenv("MAX_NEW_TOKENS_SAFETY", "1.5"))
 MAX_NEW_TOKENS_BASE = int(os.getenv("MAX_NEW_TOKENS_BASE", "96"))
 MAX_NEW_TOKENS_FLOOR = max(1, int(os.getenv("MAX_NEW_TOKENS_FLOOR", "256")))
 MAX_NEW_TOKENS_CEIL = max(1, int(os.getenv("MAX_NEW_TOKENS_CEIL", "2048")))  # = model default, không vượt
+# Sampling mặc định cho higgs. Worker không gửi → sgl-omni mặc định temp=1.0, top_p/top_k TẮT =
+# phân bố khuếch tán → dễ kẹt "silence attractor" (không sample được EOC) → runaway câm. Theo ref
+# boson voice-clone (temp 0.8 / top_k 50 / top_p 0.95). top_k>=50 để EOC không bị mask khỏi top-k.
+HIGGS_TEMPERATURE = float(os.getenv("HIGGS_TEMPERATURE", "0.8"))
+HIGGS_TOP_P = float(os.getenv("HIGGS_TOP_P", "0.95"))
+HIGGS_TOP_K = int(os.getenv("HIGGS_TOP_K", "50"))
 _DENSE_CHAR_RE = re.compile("[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]")  # CJK/kana/Hangul/fullwidth
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
@@ -428,6 +434,11 @@ def _sglang_payload(chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry) 
     # Cap động theo chunk nếu request không tự chỉ định → chặn runaway (default model 2048 ≈ 82s).
     if req.max_new_tokens is None:
         payload["max_new_tokens"] = _estimate_max_new_tokens(chunk_text)
+    # Sampling mặc định khi client không gửi → tránh phân bố khuếch tán (temp=1.0, no top_p/top_k)
+    # vốn dễ dẫn tới silence-attractor không emit EOC. setdefault → tôn trọng override của client.
+    payload.setdefault("temperature", HIGGS_TEMPERATURE)
+    payload.setdefault("top_p", HIGGS_TOP_P)
+    payload.setdefault("top_k", HIGGS_TOP_K)
     return payload
 
 
@@ -503,8 +514,22 @@ async def _call_sglang(
             f"SGLang returned undersized audio ({len(result.audio_bytes)} bytes < {CHUNK_MIN_BYTES})."
         )
 
-    # Runaway EOS: model tuôn tới max_new_tokens ra audio size hợp lệ nhưng CÂM → byte-size không
-    # bắt được. Đo âm lượng; câm → lỗi để retry (đổi seed thoát fluke). Xem _call_sglang_with_retry.
+    # Runaway EOS (tín hiệu CHÍNH, miễn phí): model không emit EOS → chạy tới đúng max_new_tokens.
+    # Bắt được CẢ câm-toàn-phần LẪN "đọc một đoạn rồi câm tới hết cap" (max_volume bỏ sót vì có tiếng
+    # ở đầu). Chỉ áp khi cap do wrapper tự đặt (req.max_new_tokens None) và cap < ceil model → tránh
+    # nhầm chunk dài hợp lệ chạm trần thật. Retry đổi seed (xem _call_sglang_with_retry).
+    cap = payload.get("max_new_tokens")
+    if (
+        req.max_new_tokens is None
+        and isinstance(cap, int)
+        and cap < MAX_NEW_TOKENS_CEIL
+        and result.completion_tokens >= cap * 0.95
+    ):
+        raise RuntimeError(
+            f"hit max_new_tokens cap ({result.completion_tokens}/{cap}); EOS-runaway → retry seed"
+        )
+
+    # Backstop: câm-toàn-phần mà vẫn emit EOS sớm (không chạm cap) → đo âm lượng.
     if CHUNK_SILENCE_MAX_DBFS > -90:
         max_db = await _max_volume_dbfs(result.audio_bytes)
         if max_db is not None and max_db < CHUNK_SILENCE_MAX_DBFS:

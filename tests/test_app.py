@@ -454,3 +454,60 @@ def test_estimate_max_new_tokens_dynamic(api):
     assert api._estimate_max_new_tokens("a" * 100000) == api.MAX_NEW_TOKENS_CEIL
     # latin ~150 ký tự: dư ~2x nhu cầu thật (~250 tok) nhưng << 2048
     assert 400 <= latin <= 900
+
+
+@pytest.mark.asyncio
+async def test_cap_hit_detected_as_runaway(tmp_path, monkeypatch):
+    # Reload riêng để gọi _call_sglang THẬT (fixture `api` thay nó bằng fake).
+    import importlib
+    from pathlib import Path as _P
+    monkeypatch.setenv("API_TOKEN", "test-token")
+    monkeypatch.setenv("TTS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("CHUNK_MIN_BYTES", "0")
+    monkeypatch.setenv("CHUNK_SILENCE_MAX_DBFS", "-100")
+    monkeypatch.setenv("CHUNK_RETRY_BASE_DELAY", "0")
+    api = importlib.reload(importlib.import_module("app"))
+    text = "a" * 150
+    cap = api._estimate_max_new_tokens(text)
+    assert cap < api.MAX_NEW_TOKENS_CEIL
+
+    class FakeResp:
+        def __init__(self, ct):
+            self.content = wav_bytes()
+            self.headers = {"x-completion-tokens": str(ct)}
+            self.status_code = 200
+        @property
+        def text(self):
+            return ""
+
+    def make_client(ct):
+        class C:
+            async def __aenter__(self_): return self_
+            async def __aexit__(self_, *a): return False
+            async def post(self_, url, json=None): return FakeResp(ct)
+        return C()
+
+    req = api.TTSRequest(chunks=[text], ref_audio_url="https://x/y.wav", ref_text="t", format="wav")
+    ref = api.ReferenceCacheEntry(audio_path=_P("/tmp/none"), transcript="t", audio_cache_hit=True)
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(cap))      # chạm cap → runaway
+    with pytest.raises(RuntimeError, match="EOS-runaway"):
+        await api._call_sglang(text, req, ref)
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(int(cap * 0.4)))  # dưới cap → ok
+    res = await api._call_sglang(text, req, ref)
+    assert res.completion_tokens == int(cap * 0.4)
+
+
+def test_sglang_payload_sets_sampling_defaults(api):
+    from pathlib import Path as _P
+    ref = api.ReferenceCacheEntry(audio_path=_P("/tmp/none"), transcript="t", audio_cache_hit=True)
+    req = api.TTSRequest(chunks=["hi"], ref_audio_url="https://x/y.wav", ref_text="t")
+    p = api._sglang_payload("hello world there", req, ref)
+    assert p["temperature"] == api.HIGGS_TEMPERATURE
+    assert p["top_p"] == api.HIGGS_TOP_P
+    assert p["top_k"] == api.HIGGS_TOP_K
+    assert "max_new_tokens" in p
+    # client override được tôn trọng
+    req2 = api.TTSRequest(chunks=["hi"], ref_audio_url="https://x/y.wav", ref_text="t", temperature=0.3)
+    assert api._sglang_payload("hello", req2, ref)["temperature"] == 0.3
