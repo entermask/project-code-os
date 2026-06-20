@@ -1,0 +1,460 @@
+{
+  "created_at": 1781849092.7218318,
+  "source": "bosonai/higgs-audio-v3-tts-4b control token test",
+  "refs": [
+    {
+      "id": "b152986c",
+      "audio": "ref_b152986c.mp3",
+      "text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra."
+    },
+    {
+      "id": "0ef967e",
+      "audio": "ref_0ef967e.mp3",
+      "text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta."
+    }
+  ],
+  "cases": [
+    {
+      "id": "baseline",
+      "category": "none",
+      "input": "Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt."
+    },
+    {
+      "id": "prosody_slow",
+      "category": "prosody",
+      "input": "<|prosody:speed_slow|>Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt."
+    },
+    {
+      "id": "prosody_fast",
+      "category": "prosody",
+      "input": "<|prosody:speed_fast|>Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt."
+    },
+    {
+      "id": "prosody_long_pause",
+      "category": "prosody",
+      "input": "Xin chào <|prosody:long_pause|> đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt."
+    },
+    {
+      "id": "style_whispering",
+      "category": "style",
+      "input": "<|style:whispering|>Nói nhỏ thôi, đây là một bí mật cần được giữ kín."
+    },
+    {
+      "id": "style_shouting",
+      "category": "style",
+      "input": "<|style:shouting|>Mọi người chú ý, chúng ta bắt đầu ngay bây giờ."
+    },
+    {
+      "id": "emotion_sadness",
+      "category": "emotion",
+      "input": "<|emotion:sadness|>Tôi thấy hơi buồn khi phải nói lời tạm biệt hôm nay."
+    },
+    {
+      "id": "emotion_sfx_laughter",
+      "category": "emotion+sfx",
+      "input": "<|emotion:amusement|><|sfx:laughter|>Haha, chuyện này thật bất ngờ nhưng cũng rất vui."
+    }
+  ],
+  "results": [
+    {
+      "ref_id": "b152986c",
+      "case_id": "baseline",
+      "category": "none",
+      "input": "Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__baseline.wav",
+      "request_id": "f15b7706-65a0-4fec-b222-a60b9c6f65f2",
+      "time_to_done_s": 0.7869128551101312,
+      "wall_s": 0.7879772240994498,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 103680,
+        "duration_s": 4.32
+      },
+      "rtf_wall": 0.18240213520820597,
+      "usage": {
+        "prompt_tokens": 166,
+        "completion_tokens": 115,
+        "total_tokens": 281,
+        "engine_time_s": 0.709684
+      }
+    },
+    {
+      "ref_id": "b152986c",
+      "case_id": "prosody_slow",
+      "category": "prosody",
+      "input": "<|prosody:speed_slow|>Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__prosody_slow.wav",
+      "request_id": "76b31aae-da42-4c38-9a9c-8b5322ced98a",
+      "time_to_done_s": 0.7789284819737077,
+      "wall_s": 0.7801138130016625,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 110400,
+        "duration_s": 4.6
+      },
+      "rtf_wall": 0.16958995934818752,
+      "usage": {
+        "prompt_tokens": 167,
+        "completion_tokens": 122,
+        "total_tokens": 289,
+        "engine_time_s": 0.69954
+      }
+    },
+    {
+      "ref_id": "b152986c",
+      "case_id": "prosody_fast",
+      "category": "prosody",
+      "input": "<|prosody:speed_fast|>Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__prosody_fast.wav",
+      "request_id": "5896121a-0240-4738-9be7-4b4a2f0e1c4a",
+      "time_to_done_s": 0.6764639619505033,
+      "wall_s": 0.6773886099690571,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 96960,
+        "duration_s": 4.04
+      },
+      "rtf_wall": 0.16767044801214284,
+      "usage": {
+        "prompt_tokens": 167,
+        "completion_tokens": 108,
+        "total_tokens": 275,
+        "engine_time_s": 0.619733
+      }
+    },
+    {
+      "ref_id": "b152986c",
+      "case_id": "prosody_long_pause",
+      "category": "prosody",
+      "input": "Xin chào <|prosody:long_pause|> đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__prosody_long_pause.wav",
+      "request_id": "747f83e5-91fd-42ac-aa29-a737a9e32c90",
+      "time_to_done_s": 0.780010386952199,
+      "wall_s": 0.7815440000267699,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 114240,
+        "duration_s": 4.76
+      },
+      "rtf_wall": 0.1641899159720105,
+      "usage": {
+        "prompt_tokens": 167,
+        "completion_tokens": 126,
+        "total_tokens": 293,
+        "engine_time_s": 0.724314
+      }
+    },
+    {
+      "ref_id": "b152986c",
+      "case_id": "style_whispering",
+      "category": "style",
+      "input": "<|style:whispering|>Nói nhỏ thôi, đây là một bí mật cần được giữ kín.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__style_whispering.wav",
+      "request_id": "75f33e48-6a96-4299-ade0-c1290a7b4d2c",
+      "time_to_done_s": 0.6831731359707192,
+      "wall_s": 0.6843617459526286,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 96960,
+        "duration_s": 4.04
+      },
+      "rtf_wall": 0.1693964717704526,
+      "usage": {
+        "prompt_tokens": 166,
+        "completion_tokens": 108,
+        "total_tokens": 274,
+        "engine_time_s": 0.618538
+      }
+    },
+    {
+      "ref_id": "b152986c",
+      "case_id": "style_shouting",
+      "category": "style",
+      "input": "<|style:shouting|>Mọi người chú ý, chúng ta bắt đầu ngay bây giờ.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__style_shouting.wav",
+      "request_id": "4bd40803-6d73-42c0-bb1b-ff5d9e8ca046",
+      "time_to_done_s": 0.5730063390219584,
+      "wall_s": 0.5741229080595076,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 81600,
+        "duration_s": 3.4
+      },
+      "rtf_wall": 0.16885967884103165,
+      "usage": {
+        "prompt_tokens": 165,
+        "completion_tokens": 92,
+        "total_tokens": 257,
+        "engine_time_s": 0.526595
+      }
+    },
+    {
+      "ref_id": "b152986c",
+      "case_id": "emotion_sadness",
+      "category": "emotion",
+      "input": "<|emotion:sadness|>Tôi thấy hơi buồn khi phải nói lời tạm biệt hôm nay.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__emotion_sadness.wav",
+      "request_id": "416f82da-f5ed-405d-9b71-8ceb1245ef7d",
+      "time_to_done_s": 0.5731253800913692,
+      "wall_s": 0.5739083660300821,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 85440,
+        "duration_s": 3.56
+      },
+      "rtf_wall": 0.16121021517698936,
+      "usage": {
+        "prompt_tokens": 164,
+        "completion_tokens": 96,
+        "total_tokens": 260,
+        "engine_time_s": 0.551183
+      }
+    },
+    {
+      "ref_id": "b152986c",
+      "case_id": "emotion_sfx_laughter",
+      "category": "emotion+sfx",
+      "input": "<|emotion:amusement|><|sfx:laughter|>Haha, chuyện này thật bất ngờ nhưng cũng rất vui.",
+      "ref_text": "Công cha như núi Thái Sơn, nghĩa mẹ như nước trong nguồn chảy ra.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/b152986c__emotion_sfx_laughter.wav",
+      "request_id": "464bba57-1551-42e6-95a8-3ed99a2ca8a5",
+      "time_to_done_s": 0.6763197400141507,
+      "wall_s": 0.6774840099969879,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 96960,
+        "duration_s": 4.04
+      },
+      "rtf_wall": 0.16769406188044253,
+      "usage": {
+        "prompt_tokens": 165,
+        "completion_tokens": 108,
+        "total_tokens": 273,
+        "engine_time_s": 0.618074
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "baseline",
+      "category": "none",
+      "input": "Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__baseline.wav",
+      "request_id": "c5a64107-382c-488f-9572-ed4ef9378a2b",
+      "time_to_done_s": 0.583677607937716,
+      "wall_s": 0.5846036259317771,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 79680,
+        "duration_s": 3.32
+      },
+      "rtf_wall": 0.17608542949752323,
+      "usage": {
+        "prompt_tokens": 292,
+        "completion_tokens": 90,
+        "total_tokens": 382,
+        "engine_time_s": 0.521365
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "prosody_slow",
+      "category": "prosody",
+      "input": "<|prosody:speed_slow|>Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__prosody_slow.wav",
+      "request_id": "9ffcbfe9-22c9-4db4-834d-a33746fb58bd",
+      "time_to_done_s": 0.6255587530322373,
+      "wall_s": 0.6266731930663809,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 88320,
+        "duration_s": 3.68
+      },
+      "rtf_wall": 0.17029162855064697,
+      "usage": {
+        "prompt_tokens": 293,
+        "completion_tokens": 99,
+        "total_tokens": 392,
+        "engine_time_s": 0.572486
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "prosody_fast",
+      "category": "prosody",
+      "input": "<|prosody:speed_fast|>Xin chào, đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__prosody_fast.wav",
+      "request_id": "cfcae2ad-6e59-463d-af4d-a466376c706e",
+      "time_to_done_s": 0.577719492954202,
+      "wall_s": 0.5789110040059313,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 84480,
+        "duration_s": 3.52
+      },
+      "rtf_wall": 0.16446335341077595,
+      "usage": {
+        "prompt_tokens": 293,
+        "completion_tokens": 95,
+        "total_tokens": 388,
+        "engine_time_s": 0.549156
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "prosody_long_pause",
+      "category": "prosody",
+      "input": "Xin chào <|prosody:long_pause|> đây là bài kiểm tra điều khiển giọng nói bằng tiếng Việt.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__prosody_long_pause.wav",
+      "request_id": "1cbe46ad-ae0a-433c-978e-36278644a832",
+      "time_to_done_s": 0.6243814011104405,
+      "wall_s": 0.62555776105728,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 88320,
+        "duration_s": 3.68
+      },
+      "rtf_wall": 0.16998852202643477,
+      "usage": {
+        "prompt_tokens": 293,
+        "completion_tokens": 99,
+        "total_tokens": 392,
+        "engine_time_s": 0.574362
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "style_whispering",
+      "category": "style",
+      "input": "<|style:whispering|>Nói nhỏ thôi, đây là một bí mật cần được giữ kín.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__style_whispering.wav",
+      "request_id": "05817cd0-492b-4dc9-9c99-e547aa264eab",
+      "time_to_done_s": 0.5753524999599904,
+      "wall_s": 0.5765861410181969,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 78720,
+        "duration_s": 3.28
+      },
+      "rtf_wall": 0.1757884576274991,
+      "usage": {
+        "prompt_tokens": 292,
+        "completion_tokens": 89,
+        "total_tokens": 381,
+        "engine_time_s": 0.516194
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "style_shouting",
+      "category": "style",
+      "input": "<|style:shouting|>Mọi người chú ý, chúng ta bắt đầu ngay bây giờ.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__style_shouting.wav",
+      "request_id": "f75ffdcd-3389-4d1c-a438-c78555fbe92d",
+      "time_to_done_s": 0.4738011609297246,
+      "wall_s": 0.47485289990436286,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 68160,
+        "duration_s": 2.84
+      },
+      "rtf_wall": 0.16720172531843763,
+      "usage": {
+        "prompt_tokens": 291,
+        "completion_tokens": 78,
+        "total_tokens": 369,
+        "engine_time_s": 0.452141
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "emotion_sadness",
+      "category": "emotion",
+      "input": "<|emotion:sadness|>Tôi thấy hơi buồn khi phải nói lời tạm biệt hôm nay.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__emotion_sadness.wav",
+      "request_id": "92fa7a78-b422-4bdf-8ce1-d5f8a16a0b7b",
+      "time_to_done_s": 0.5749399939086288,
+      "wall_s": 0.5761763249756768,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 74880,
+        "duration_s": 3.12
+      },
+      "rtf_wall": 0.18467189903066564,
+      "usage": {
+        "prompt_tokens": 290,
+        "completion_tokens": 85,
+        "total_tokens": 375,
+        "engine_time_s": 0.493426
+      }
+    },
+    {
+      "ref_id": "0ef967e",
+      "case_id": "emotion_sfx_laughter",
+      "category": "emotion+sfx",
+      "input": "<|emotion:amusement|><|sfx:laughter|>Haha, chuyện này thật bất ngờ nhưng cũng rất vui.",
+      "ref_text": "Xin chào, tôi rất vui được hỗ trợ bạn về các dịch vụ giọng nói của chúng tôi. Hãy chọn một giọng nói phù hợp với bạn và cùng bắt đầu hành trình âm thanh sáng tạo của chúng ta.",
+      "wav_path": "/workspace/Fish-Audio/generated/control_tokens_vi/0ef967e__emotion_sfx_laughter.wav",
+      "request_id": "8789bb3c-f68b-4872-baa5-19577c27623e",
+      "time_to_done_s": 0.5739766339538619,
+      "wall_s": 0.5754134659655392,
+      "audio_info": {
+        "channels": 1,
+        "sample_width": 2,
+        "sample_rate": 24000,
+        "frames": 79680,
+        "duration_s": 3.32
+      },
+      "rtf_wall": 0.17331730902576484,
+      "usage": {
+        "prompt_tokens": 291,
+        "completion_tokens": 90,
+        "total_tokens": 381,
+        "engine_time_s": 0.521516
+      }
+    }
+  ]
+}

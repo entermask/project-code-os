@@ -1,0 +1,64 @@
+{
+  "label": "concurrent_4_cached_ref",
+  "group_wall_s": 1.7632419560104609,
+  "accepted": 4,
+  "errors": [],
+  "requests_per_second_group": 2.2685485598643895,
+  "avg_wall_s": 1.1487312499666587,
+  "max_wall_s": 1.7605632219929248,
+  "avg_rtf_wall": 0.43226807343507967,
+  "rows": [
+    {
+      "idx": 0,
+      "request_id": "cf85bee4-c975-4f2e-a9d9-d2cb875db08e",
+      "submit_s": 0.006782707991078496,
+      "done_s": 0.5338707769988105,
+      "wall_s": 0.5350697319954634,
+      "audio_duration_s": 2.52,
+      "rtf_wall": 0.21232925872835848,
+      "audio_bytes": 121004,
+      "polls": 6,
+      "engine_time_s": 0.411218,
+      "completion_tokens": 70
+    },
+    {
+      "idx": 1,
+      "request_id": "af40d69c-dac5-4865-8aa3-2e72f651ee94",
+      "submit_s": 0.005226326989941299,
+      "done_s": 0.9436370460316539,
+      "wall_s": 0.9446576989721507,
+      "audio_duration_s": 2.56,
+      "rtf_wall": 0.36900691366099636,
+      "audio_bytes": 122924,
+      "polls": 10,
+      "engine_time_s": 0.40539,
+      "completion_tokens": 71
+    },
+    {
+      "idx": 2,
+      "request_id": "a8ec376c-e87b-4fd4-8360-3b098d649926",
+      "submit_s": 0.005204556975513697,
+      "done_s": 1.3530395969282836,
+      "wall_s": 1.3546343469060957,
+      "audio_duration_s": 2.76,
+      "rtf_wall": 0.4908095459804695,
+      "audio_bytes": 132524,
+      "polls": 14,
+      "engine_time_s": 0.434005,
+      "completion_tokens": 76
+    },
+    {
+      "idx": 3,
+      "request_id": "bba1e5db-f188-475a-8d38-d0c7e70693e3",
+      "submit_s": 0.015981745906174183,
+      "done_s": 1.7594036469236016,
+      "wall_s": 1.7605632219929248,
+      "audio_duration_s": 2.68,
+      "rtf_wall": 0.6569265753704943,
+      "audio_bytes": 128684,
+      "polls": 18,
+      "engine_time_s": 0.422469,
+      "completion_tokens": 74
+    }
+  ]
+}

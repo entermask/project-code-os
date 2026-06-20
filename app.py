@@ -3,6 +3,8 @@ import hashlib
 import json
 import logging
 import os
+import random
+import re
 import shutil
 import time
 import uuid
@@ -21,12 +23,14 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-logger = logging.getLogger("fish-audio-api")
+logger = logging.getLogger("sglang-tts-api")
 
 
 API_TOKEN = os.getenv("API_TOKEN", "")
+TTS_BACKEND_NAME = os.getenv("TTS_BACKEND_NAME", os.getenv("MODEL_PATH", "bosonai/higgs-audio-v3-tts-4b"))
 SGLANG_BASE_URL = os.getenv("SGLANG_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-CACHE_DIR = Path(os.getenv("FISH_AUDIO_CACHE_DIR", "/ephemeral/fish-audio-cache"))
+SPEECH_MODEL = os.getenv("SPEECH_MODEL", "").strip()
+CACHE_DIR = Path(os.getenv("TTS_CACHE_DIR", "/ephemeral/tts-cache"))
 REF_AUDIO_DIR = CACHE_DIR / "ref-audio"
 TRANSCRIPT_DIR = CACHE_DIR / "transcripts"
 JOB_DIR = CACHE_DIR / "jobs"
@@ -45,7 +49,36 @@ SHORT_REQUEST_MAX_CHUNKS = max(1, int(os.getenv("SHORT_REQUEST_MAX_CHUNKS", "4")
 LONG_CONCURRENT_CHUNKS = MAX_CONCURRENT_CHUNKS - SHORT_RESERVED_CHUNKS
 MAX_IN_FLIGHT_CHUNKS_PER_JOB = max(1, int(os.getenv("MAX_IN_FLIGHT_CHUNKS_PER_JOB", "12")))
 BUSY_BACKLOG_CHUNKS = max(1, int(os.getenv("BUSY_BACKLOG_CHUNKS", "32")))
+# Per-chunk retry: lỗi tạm từ SGLang (5xx/CUDA/network) hoặc audio rỗng/quá nhỏ
+# sẽ được sinh lại tối đa CHUNK_RETRY_ATTEMPTS lần thay vì giết cả job ngay.
+CHUNK_RETRY_ATTEMPTS = max(1, int(os.getenv("CHUNK_RETRY_ATTEMPTS", "3")))
+CHUNK_RETRY_BASE_DELAY = float(os.getenv("CHUNK_RETRY_BASE_DELAY", "1.0"))
+# Audio nhỏ hơn ngưỡng này coi như chunk hỏng (gần-câm/cụt) → retry. 0 = tắt kiểm tra.
+CHUNK_MIN_BYTES = max(0, int(os.getenv("CHUNK_MIN_BYTES", "512")))
+# Higgs đôi khi không emit EOS → tuôn tới max_new_tokens ra audio SIZE HỢP LỆ nhưng CÂM
+# (byte-size không bắt được). Đo max_volume: nếu < ngưỡng này (dBFS) coi là câm → retry seed khác.
+# Speech thật có peak > -20dB nên -50 tách sạch. Đặt <= -90 để TẮT kiểm tra.
+CHUNK_SILENCE_MAX_DBFS = float(os.getenv("CHUNK_SILENCE_MAX_DBFS", "-50"))
+# Dynamic max_new_tokens theo độ dài + script của chunk (codec Higgs = 25 fps; xem docs higgs_tts).
+# Đo thực: latin ~1.4-1.66 tok/char, Hangul ~3.6, CJK ~4.8-5.1. Dùng rate + margin RỘNG để không
+# cắt cụt chunk thật, nhưng chặn runaway (default 2048 ≈ 82s) xuống sát nhu cầu (~3-4× với latin).
+TOK_PER_CHAR_LATIN = float(os.getenv("TOK_PER_CHAR_LATIN", "2.0"))
+TOK_PER_CHAR_DENSE = float(os.getenv("TOK_PER_CHAR_DENSE", "6.0"))   # CJK + Hangul + kana
+MAX_NEW_TOKENS_SAFETY = float(os.getenv("MAX_NEW_TOKENS_SAFETY", "1.5"))
+MAX_NEW_TOKENS_BASE = int(os.getenv("MAX_NEW_TOKENS_BASE", "96"))
+MAX_NEW_TOKENS_FLOOR = max(1, int(os.getenv("MAX_NEW_TOKENS_FLOOR", "256")))
+MAX_NEW_TOKENS_CEIL = max(1, int(os.getenv("MAX_NEW_TOKENS_CEIL", "2048")))  # = model default, không vượt
+_DENSE_CHAR_RE = re.compile("[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]")  # CJK/kana/Hangul/fullwidth
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
+
+
+def _estimate_max_new_tokens(text: str) -> int:
+    """Cap động theo độ dài/script chunk: đủ dư cho audio thật, chặn runaway sát nhu cầu thực."""
+    dense = len(_DENSE_CHAR_RE.findall(text))
+    other = max(0, len(text) - dense)
+    est = dense * TOK_PER_CHAR_DENSE + other * TOK_PER_CHAR_LATIN
+    cap = int(est * MAX_NEW_TOKENS_SAFETY) + MAX_NEW_TOKENS_BASE
+    return max(MAX_NEW_TOKENS_FLOOR, min(MAX_NEW_TOKENS_CEIL, cap))
 
 SUPPORTED_FORMATS = {"wav", "mp3"}
 SUPPORTED_REF_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
@@ -60,7 +93,7 @@ OPTIONAL_SGLANG_FIELDS = (
 )
 
 
-app = FastAPI(title="Fish Audio S2 Pro API", version="0.1.0")
+app = FastAPI(title="SGLang TTS API", version="0.2.0")
 
 chunk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHUNKS)
 short_chunk_semaphore = asyncio.Semaphore(SHORT_RESERVED_CHUNKS) if SHORT_RESERVED_CHUNKS else None
@@ -78,7 +111,7 @@ class TTSRequest(BaseModel):
     chunks: list[str]
     ref_audio_url: str
     ref_text: str
-    format: str = "wav"
+    format: str = "mp3"
     speed: Optional[float] = None
     max_new_tokens: Optional[int] = None
     temperature: Optional[float] = None
@@ -307,7 +340,11 @@ async def _prepare_reference(req: TTSRequest) -> ReferenceCacheEntry:
 async def _try_reserve_chunks(chunk_count: int) -> tuple[bool, int]:
     global outstanding_chunks
     async with outstanding_chunks_lock:
-        if outstanding_chunks + chunk_count > BUSY_BACKLOG_CHUNKS:
+        # Shed tải khi backlog HIỆN TẠI đã chạm ngưỡng; nhưng LUÔN nhận 1 job khi còn dưới ngưỡng,
+        # kể cả job có chunk_count > cap. Nếu so theo (outstanding + chunk_count) thì 1 job lớn
+        # (vd 369 chunk) sẽ bị 429 vĩnh viễn → fail. Job lớn được nhận sẽ tự đẩy backlog vượt cap
+        # và chặn job mới tới khi rút bớt (least-loaded routing đẩy job khác sang bridge rảnh).
+        if outstanding_chunks >= BUSY_BACKLOG_CHUNKS:
             return False, outstanding_chunks
         outstanding_chunks += chunk_count
         return True, outstanding_chunks
@@ -331,6 +368,18 @@ def _is_mp3(data: bytes) -> bool:
     if data.startswith(b"ID3"):
         return True
     return len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0
+
+
+def _unwrap_sglang_audio(data: bytes) -> bytes:
+    if len(data) < 8:
+        return data
+    frame_count = int.from_bytes(data[:4], "big")
+    frame_size = int.from_bytes(data[4:8], "big")
+    if frame_count == 1 and frame_size == len(data) - 8:
+        framed = data[8:]
+        if _is_mp3(framed) or _is_wav(framed):
+            return framed
+    return data
 
 
 async def _wav_to_mp3(wav_bytes: bytes) -> bytes:
@@ -370,10 +419,15 @@ def _sglang_payload(chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry) 
             }
         ],
     }
+    if SPEECH_MODEL:
+        payload["model"] = SPEECH_MODEL
     for field in OPTIONAL_SGLANG_FIELDS:
         value = getattr(req, field)
         if value is not None:
             payload[field] = value
+    # Cap động theo chunk nếu request không tự chỉ định → chặn runaway (default model 2048 ≈ 82s).
+    if req.max_new_tokens is None:
+        payload["max_new_tokens"] = _estimate_max_new_tokens(chunk_text)
     return payload
 
 
@@ -391,8 +445,37 @@ def _header_float(headers: httpx.Headers, key: str) -> float:
         return 0.0
 
 
-async def _call_sglang(chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry) -> ChunkResult:
+async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
+    """max_volume (dBFS) của audio qua ffmpeg volumedetect. None nếu không phân tích được."""
+    if not audio_bytes or not shutil.which(FFMPEG_BIN):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFMPEG_BIN, "-hide_banner", "-nostats",
+            "-i", "pipe:0", "-af", "volumedetect", "-f", "null", "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate(audio_bytes)
+    except Exception as exc:
+        logger.warning("volumedetect failed: %s", exc)
+        return None
+    text = stderr.decode("utf-8", "replace")
+    match = re.search(r"max_volume:\s*(-?\d+(?:\.\d+)?) dB", text)
+    if match:
+        return float(match.group(1))
+    if re.search(r"max_volume:\s*-inf", text):
+        return float("-inf")
+    return None
+
+
+async def _call_sglang(
+    chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry, seed_override: Optional[int] = None,
+) -> ChunkResult:
     payload = _sglang_payload(chunk_text, req, ref)
+    if seed_override is not None:
+        payload["seed"] = seed_override
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         response = await client.post(f"{SGLANG_BASE_URL}/v1/audio/speech", json=payload)
 
@@ -400,7 +483,7 @@ async def _call_sglang(chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntr
         detail = response.text[:500]
         raise RuntimeError(f"SGLang returned HTTP {response.status_code}: {detail}")
 
-    audio_bytes = response.content
+    audio_bytes = _unwrap_sglang_audio(response.content)
     if not audio_bytes:
         raise RuntimeError("SGLang returned empty audio.")
 
@@ -411,14 +494,51 @@ async def _call_sglang(chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntr
         engine_time_s=_header_float(response.headers, "x-engine-time"),
     )
 
-    if req.format == "mp3":
-        if _is_mp3(result.audio_bytes):
-            return result
-        if _is_wav(audio_bytes):
-            result.audio_bytes = await _wav_to_mp3(audio_bytes)
-        return result
+    if req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
+        result.audio_bytes = await _wav_to_mp3(audio_bytes)
+
+    # Audio rỗng/quá nhỏ = chunk gần-câm/cụt → coi là lỗi để retry (xem _generate_one_chunk).
+    if CHUNK_MIN_BYTES and len(result.audio_bytes) < CHUNK_MIN_BYTES:
+        raise RuntimeError(
+            f"SGLang returned undersized audio ({len(result.audio_bytes)} bytes < {CHUNK_MIN_BYTES})."
+        )
+
+    # Runaway EOS: model tuôn tới max_new_tokens ra audio size hợp lệ nhưng CÂM → byte-size không
+    # bắt được. Đo âm lượng; câm → lỗi để retry (đổi seed thoát fluke). Xem _call_sglang_with_retry.
+    if CHUNK_SILENCE_MAX_DBFS > -90:
+        max_db = await _max_volume_dbfs(result.audio_bytes)
+        if max_db is not None and max_db < CHUNK_SILENCE_MAX_DBFS:
+            raise RuntimeError(
+                f"silent audio output (max_volume {max_db:.1f} dBFS < {CHUNK_SILENCE_MAX_DBFS}); likely EOS-runaway"
+            )
 
     return result
+
+
+async def _call_sglang_with_retry(
+    request_id: str,
+    chunk_index: int,
+    text: str,
+    req: TTSRequest,
+    ref: ReferenceCacheEntry,
+) -> ChunkResult:
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, CHUNK_RETRY_ATTEMPTS + 1):
+        try:
+            # Attempt đầu dùng seed tự nhiên; retry ĐỔI seed để thoát runaway/silent (sampling fluke,
+            # cùng seed thường câm lại). seed=None ở lần đầu → giữ hành vi mặc định của backend.
+            seed_override = None if attempt == 1 else random.randint(1, 2_147_483_647)
+            return await _call_sglang(text, req, ref, seed_override=seed_override)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < CHUNK_RETRY_ATTEMPTS:
+                logger.warning(
+                    "TTS job %s chunk %d attempt %d/%d failed: %s; retrying with new seed",
+                    request_id, chunk_index, attempt, CHUNK_RETRY_ATTEMPTS, exc,
+                )
+                await asyncio.sleep(CHUNK_RETRY_BASE_DELAY * attempt)
+    assert last_exc is not None
+    raise last_exc
 
 
 async def _generate_one_chunk(
@@ -433,8 +553,16 @@ async def _generate_one_chunk(
 ) -> Path:
     async with job_semaphore:
         async with _lane_semaphore(lane):
-            result = await _call_sglang(text, req, ref)
-            output_path.write_bytes(result.audio_bytes)
+            result = await _call_sglang_with_retry(request_id, chunk_index, text, req, ref)
+            # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
+            tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+            try:
+                tmp_path.write_bytes(result.audio_bytes)
+                os.replace(tmp_path, output_path)
+            except BaseException:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                raise
 
     await _release_chunks(1)
     async with jobs_lock:
@@ -470,6 +598,10 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                 job.transcript = ref.transcript
                 job.audio_cache_hit = ref.audio_cache_hit
                 job.cleanup_paths = [job_dir]
+                # Gán sớm để /audio phục vụ progressive khi job còn "running";
+                # file chunk xuất hiện dần (ghi atomic), /audio gate theo exists().
+                job.chunk_paths = output_paths
+                job.chunk_media_type = _media_type_for_format(req.format)
                 job.updated_at = time.time()
 
         lane = job.lane if job else _request_lane(req)
@@ -629,6 +761,7 @@ async def health() -> dict[str, Any]:
         current_outstanding = outstanding_chunks
     return {
         "status": "ok",
+        "tts_backend_name": TTS_BACKEND_NAME,
         "sglang_ready": sglang_ready,
         "sglang_base_url": SGLANG_BASE_URL,
         "sglang_status": sglang_status,
@@ -740,16 +873,20 @@ async def get_tts_job_audio(
         job = jobs.get(request_id)
         if job is None:
             raise HTTPException(status_code=404, detail="TTS job not found.")
-        if job.status != "succeeded":
-            raise HTTPException(status_code=409, detail=f"TTS job is {job.status}.")
+        if job.status == "queued":
+            raise HTTPException(status_code=409, detail="TTS job is queued.")
+        if job.status == "failed":
+            raise HTTPException(status_code=409, detail=f"TTS job failed: {job.detail or 'unknown error'}.")
+        # running | succeeded: chunk_paths đã được gán sớm trong _run_tts_job.
         if not job.chunk_paths:
-            raise HTTPException(status_code=500, detail="TTS job audio is missing.")
+            raise HTTPException(status_code=409, detail=f"TTS job is {job.status}.")
+        job_status = job.status
         all_chunk_paths = list(job.chunk_paths)
         total_chunks = len(all_chunk_paths)
         if chunk_from >= total_chunks:
             raise HTTPException(status_code=416, detail="from is outside available chunks.")
         chunk_to = total_chunks if chunks is None else min(chunk_from + chunks, total_chunks)
-        chunk_paths = all_chunk_paths[chunk_from:chunk_to]
+        requested_paths = all_chunk_paths[chunk_from:chunk_to]
         media_type = job.chunk_media_type or _media_type_for_format(job.format)
         transcript = job.transcript
         cache_hit = job.audio_cache_hit
@@ -758,9 +895,21 @@ async def get_tts_job_audio(
         total_tokens = job.total_tokens
         engine_time_s = job.engine_time_s
 
-    for path in chunk_paths:
-        if not path.exists():
+    # Chỉ phục vụ đoạn LIỀN-MẠCH đã ghi xong tính từ `from`; dừng ở chunk đầu tiên chưa có.
+    # Worker tự cộng dồn `fetched += parsed.length` rồi xin tiếp from kế tiếp.
+    chunk_paths: list[Path] = []
+    for path in requested_paths:
+        if path.exists():
+            chunk_paths.append(path)
+        else:
+            break
+
+    if not chunk_paths:
+        if job_status == "succeeded":
+            # succeeded mà file không còn → đã bị cleanup theo TTL.
             raise HTTPException(status_code=410, detail="TTS job audio expired.")
+        # chunk `from` chưa sinh xong → worker poll lại.
+        raise HTTPException(status_code=409, detail="TTS chunk not ready yet.")
 
     async def stream_length_prefixed():
         yield len(chunk_paths).to_bytes(4, "big")

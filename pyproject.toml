@@ -1,7 +1,7 @@
 [project]
-name = "fish-audio-sglang-api"
+name = "sglang-tts-api"
 version = "0.1.0"
-description = "FastAPI wrapper for Fish Audio S2 Pro served by SGLang-Omni"
+description = "FastAPI wrapper for Higgs Audio v3 TTS served by SGLang-Omni"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.110.0",
@@ -19,4 +19,3 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-

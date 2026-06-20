@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VENV_DIR="${VENV_DIR:-$HOME/venvs/fish-audio-api}"
+VENV_DIR="${VENV_DIR:-$HOME/venvs/sglang-tts-api}"
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
@@ -18,6 +18,5 @@ if [ ! -f .env ]; then
   cp .env.example .env
 fi
 
-echo "Installed Fish Audio API dependencies in $VENV_DIR"
+echo "Installed SGLang TTS API dependencies in $VENV_DIR"
 echo "Activate with: source $VENV_DIR/bin/activate"
-

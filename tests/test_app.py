@@ -24,6 +24,18 @@ def labeled_wav_bytes(label: str) -> bytes:
     return data + label.encode("utf-8")
 
 
+def tone_wav_bytes() -> bytes:
+    """~1s sóng vuông biên độ lớn → max_volume ~0dB (KHÔNG câm)."""
+    buf = BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        sample = struct.pack("<h", 30000) + struct.pack("<h", -30000)
+        wav.writeframes(sample * 8000)
+    return buf.getvalue()
+
+
 def parse_framed_audio(body: bytes) -> list[bytes]:
     offset = 0
     count = struct.unpack_from(">I", body, offset)[0]
@@ -37,20 +49,29 @@ def parse_framed_audio(body: bytes) -> list[bytes]:
     return chunks
 
 
+def single_audio_frame(audio: bytes) -> bytes:
+    return struct.pack(">II", 1, len(audio)) + audio
+
+
 @pytest.fixture()
 def api(tmp_path, monkeypatch):
     monkeypatch.setenv("API_TOKEN", "test-token")
-    monkeypatch.setenv("FISH_AUDIO_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("TTS_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("SGLANG_BASE_URL", "http://sglang.test")
     monkeypatch.setenv("BUSY_BACKLOG_CHUNKS", "8")
     monkeypatch.setenv("MAX_CONCURRENT_CHUNKS", "2")
+    # Audio test tổng hợp rất nhỏ (~364B); tắt ngưỡng min-bytes để không bị coi là chunk hỏng.
+    monkeypatch.setenv("CHUNK_MIN_BYTES", "0")
+    monkeypatch.setenv("CHUNK_RETRY_BASE_DELAY", "0")
+    # Audio test là silence → tắt silence-check ở suite chung để khỏi false-positive.
+    monkeypatch.setenv("CHUNK_SILENCE_MAX_DBFS", "-100")
     module = importlib.import_module("app")
     module = importlib.reload(module)
 
     async def fake_download(ref_audio_url, target):
         target.write_bytes(b"fake reference audio")
 
-    async def fake_call_sglang(chunk_text, req, ref):
+    async def fake_call_sglang(chunk_text, req, ref, seed_override=None):
         assert ref.audio_path.exists()
         assert ref.transcript == "reference transcript"
         return module.ChunkResult(
@@ -141,7 +162,7 @@ async def test_submit_poll_and_download_audio(client):
 
 @pytest.mark.asyncio
 async def test_download_audio_range(client, api, monkeypatch):
-    async def fake_call_sglang(chunk_text, req, ref):
+    async def fake_call_sglang(chunk_text, req, ref, seed_override=None):
         return api.ChunkResult(audio_bytes=labeled_wav_bytes(chunk_text))
 
     monkeypatch.setattr(api, "_call_sglang", fake_call_sglang)
@@ -175,6 +196,125 @@ async def test_download_audio_range(client, api, monkeypatch):
     chunks = parse_framed_audio(audio.content)
     assert len(chunks) == 1
     assert chunks[0].endswith(b"second")
+
+
+@pytest.mark.asyncio
+async def test_audio_progressive_contiguous_gating(client, api):
+    # Dựng thẳng job state để kiểm tra logic /audio (không phụ thuộc background task/timing).
+    # chunk 0 và 2 đã ghi, chunk 1 CHƯA (out-of-order completion); chunks_completed đếm = 2.
+    import time
+
+    job_dir = api.JOB_DIR / "progjob"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    paths = [job_dir / f"chunk_{i:05d}.wav" for i in range(3)]
+    paths[0].write_bytes(labeled_wav_bytes("c0"))
+    paths[2].write_bytes(labeled_wav_bytes("c2"))
+
+    now = time.time()
+    job = api.TTSJob(
+        request_id="progjob",
+        status="running",
+        created_at=now,
+        updated_at=now,
+        format="wav",
+        chunks_total=3,
+        chunks_completed=2,
+        chunk_paths=paths,
+        chunk_media_type="audio/wav",
+        cleanup_paths=[job_dir],
+    )
+    async with api.jobs_lock:
+        api.jobs["progjob"] = job
+
+    url = "/v1/tts/jobs/progjob/audio"
+
+    # from=0: chunk0 có nhưng chunk1 chưa → chỉ trả đoạn liền-mạch [0,1), KHÔNG nhảy qua khoảng trống.
+    r = await client.get(f"{url}?from=0&chunks=3", headers=auth_headers())
+    assert r.status_code == 200
+    out = parse_framed_audio(r.content)
+    assert len(out) == 1 and out[0].endswith(b"c0")
+    assert r.headers["x-chunks-returned"] == "1"
+    assert r.headers["x-chunks-total"] == "3"
+
+    # from=1: chunk1 chưa ghi xong → 409 dù job đang running (worker sẽ poll lại).
+    r = await client.get(f"{url}?from=1&chunks=2", headers=auth_headers())
+    assert r.status_code == 409
+
+    # from=2: chunk2 đã có → phục vụ được NGAY khi job còn running (progressive thật).
+    r = await client.get(f"{url}?from=2&chunks=1", headers=auth_headers())
+    assert r.status_code == 200
+    assert parse_framed_audio(r.content)[0].endswith(b"c2")
+
+    # Job đã succeeded nhưng file chunk0 bị cleanup → 410 (expired), không phải 409.
+    async with api.jobs_lock:
+        api.jobs["progjob"].status = "succeeded"
+    paths[0].unlink()
+    r = await client.get(f"{url}?from=0&chunks=3", headers=auth_headers())
+    assert r.status_code == 410
+
+
+@pytest.mark.asyncio
+async def test_chunk_retry_recovers_transient_error(client, api, monkeypatch):
+    calls = {"n": 0}
+
+    async def flaky_call_sglang(chunk_text, req, ref, seed_override=None):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("transient sglang error")
+        return api.ChunkResult(audio_bytes=labeled_wav_bytes(chunk_text))
+
+    monkeypatch.setattr(api, "_call_sglang", flaky_call_sglang)
+    response = await client.post(
+        "/v1/tts",
+        headers=auth_headers(),
+        json={
+            "chunks": ["only"],
+            "ref_audio_url": "https://example.com/retry-ref.wav",
+            "ref_text": "reference transcript",
+            "format": "wav",
+        },
+    )
+    payload = response.json()
+    for _ in range(50):
+        body = (await client.get(payload["status_url"], headers=auth_headers())).json()
+        if body["status"] in ("succeeded", "failed"):
+            break
+        await asyncio.sleep(0.01)
+    assert body["status"] == "succeeded"
+    assert calls["n"] == 2  # 1 lần lỗi + 1 lần thành công
+
+
+@pytest.mark.asyncio
+async def test_persistent_chunk_error_fails_job_and_audio_409(client, api, monkeypatch):
+    monkeypatch.setattr(api, "CHUNK_RETRY_ATTEMPTS", 2)
+    monkeypatch.setattr(api, "CHUNK_RETRY_BASE_DELAY", 0.0)
+
+    async def always_fail(chunk_text, req, ref, seed_override=None):
+        raise RuntimeError("persistent sglang error")
+
+    monkeypatch.setattr(api, "_call_sglang", always_fail)
+    response = await client.post(
+        "/v1/tts",
+        headers=auth_headers(),
+        json={
+            "chunks": ["x"],
+            "ref_audio_url": "https://example.com/small-ref.wav",
+            "ref_text": "reference transcript",
+            "format": "wav",
+        },
+    )
+    payload = response.json()
+    for _ in range(50):
+        body = (await client.get(payload["status_url"], headers=auth_headers())).json()
+        if body["status"] in ("succeeded", "failed"):
+            break
+        await asyncio.sleep(0.01)
+    assert body["status"] == "failed"
+    # /audio cho job failed → 409 kèm detail.
+    audio_url = f"/v1/tts/jobs/{payload['request_id']}/audio"
+    r = await client.get(f"{audio_url}?from=0&chunks=1", headers=auth_headers())
+    assert r.status_code == 409
+    assert "failed" in r.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -228,6 +368,34 @@ def test_cache_path_uses_hash_and_suffix(api):
     assert len(path.stem) == 64
 
 
+def test_unwrap_sglang_single_audio_frame(api):
+    audio = b"ID3\x04\x00\x00\x00\x00\x00\x23" + b"\xff\xf3" + b"\x00" * 16
+    assert api._unwrap_sglang_audio(single_audio_frame(audio)) == audio
+
+
+def test_sglang_payload_includes_model_only_when_configured(api, monkeypatch):
+    req = api.TTSRequest(
+        chunks=["hello"],
+        ref_audio_url="https://example.com/ref.wav",
+        ref_text="reference transcript",
+    )
+    ref = api.ReferenceCacheEntry(
+        audio_path=api.Path("/tmp/ref.wav"),
+        transcript="reference transcript",
+        audio_cache_hit=False,
+    )
+
+    monkeypatch.setattr(api, "SPEECH_MODEL", "")
+    payload = api._sglang_payload("hello", req, ref)
+    assert "model" not in payload
+    assert payload["response_format"] == "mp3"
+    assert "speed" not in payload
+
+    monkeypatch.setattr(api, "SPEECH_MODEL", "bosonai/higgs-audio-v3-tts-4b")
+    payload = api._sglang_payload("hello", req, ref)
+    assert payload["model"] == "bosonai/higgs-audio-v3-tts-4b"
+
+
 def test_job_payload_includes_audio_url_only_when_succeeded(api):
     job = api.TTSJob(
         request_id="abc",
@@ -240,3 +408,49 @@ def test_job_payload_includes_audio_url_only_when_succeeded(api):
     assert "audio_url" not in api._job_payload(job)
     job.status = "succeeded"
     assert api._job_payload(job)["audio_url"] == "/v1/tts/jobs/abc/audio"
+
+
+@pytest.mark.asyncio
+async def test_max_volume_detects_silence(api):
+    silent = await api._max_volume_dbfs(wav_bytes())       # toàn 0 → câm
+    loud = await api._max_volume_dbfs(tone_wav_bytes())    # sóng vuông biên độ lớn
+    if silent is None or loud is None:
+        pytest.skip("ffmpeg không có trong môi trường test")
+    assert silent < -50          # câm
+    assert loud > -50            # có tiếng
+
+
+@pytest.mark.asyncio
+async def test_retry_varies_seed_on_silent_chunk(api, monkeypatch):
+    from pathlib import Path as _Path
+    seeds = []
+    calls = {"n": 0}
+
+    async def fake_call(chunk_text, req, ref, seed_override=None):
+        calls["n"] += 1
+        seeds.append(seed_override)
+        if calls["n"] == 1:
+            raise RuntimeError("silent audio output (max_volume -inf dBFS); likely EOS-runaway")
+        return api.ChunkResult(audio_bytes=labeled_wav_bytes(chunk_text))
+
+    monkeypatch.setattr(api, "_call_sglang", fake_call)
+    req = api.TTSRequest(chunks=["hello"], ref_audio_url="https://x/y.wav", ref_text="t")
+    ref = api.ReferenceCacheEntry(audio_path=_Path("/tmp/none"), transcript="t", audio_cache_hit=True)
+
+    result = await api._call_sglang_with_retry("job", 1, "hello", req, ref)
+    assert result.audio_bytes.endswith(b"hello")
+    assert calls["n"] == 2            # câm lần 1 → retry lần 2 thành công
+    assert seeds[0] is None           # lần đầu giữ seed mặc định
+    assert isinstance(seeds[1], int)  # retry ĐỔI seed
+
+
+def test_estimate_max_new_tokens_dynamic(api):
+    latin = api._estimate_max_new_tokens("a" * 150)
+    dense = api._estimate_max_new_tokens("中" * 150)
+    assert api.MAX_NEW_TOKENS_FLOOR <= latin <= api.MAX_NEW_TOKENS_CEIL
+    assert latin < dense                                  # CJK tốn token/char hơn latin
+    assert dense <= api.MAX_NEW_TOKENS_CEIL               # vẫn clamp ≤ default model
+    assert api._estimate_max_new_tokens("") == api.MAX_NEW_TOKENS_FLOOR
+    assert api._estimate_max_new_tokens("a" * 100000) == api.MAX_NEW_TOKENS_CEIL
+    # latin ~150 ký tự: dư ~2x nhu cầu thật (~250 tok) nhưng << 2048
+    assert 400 <= latin <= 900

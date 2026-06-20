@@ -1,0 +1,57 @@
+{
+  "text": "On a cold morning near the harbor, the city sounded different from the way it did in summer. The streets were still busy, but every engine, footstep, and conversation seemed softened by the fog. A ferry moved slowly across the gray water while workers carried crates from the market into narrow side streets. Nobody was in a hurry, yet everything kept moving with quiet precision.\n\nInside a small recording room above a closed bookstore, Daniel listened to the same sentence again and again. He was not looking for a perfect voice; he was looking for a voice that stayed natural when the paragraph became longer. Short samples were easy to impress with, but long passages revealed the truth. A model could sound confident for ten seconds and then lose rhythm, swallow consonants, or drift away from the original speaker.\n\nHe wrote each result into a notebook. First came the response time, then the number of chunks, then the total duration of the generated audio. After that he added comments about pacing, breath, emphasis, and fatigue. The best system was not always the one with the fastest single request. It was the one that remained predictable when several requests arrived at once, and still produced speech that people could listen to without distraction.\n\nBy the afternoon, the fog had lifted and sunlight reached the windows. Daniel played the final sample from beginning to end without touching the keyboard. The voice held together across the whole passage. It was not flawless, but it was steady, clear, and fast enough to be useful. That was the result he needed: not a miracle, just a reliable tool that could survive real work.",
+  "ref_text": "Our distrust is very expensive.",
+  "chunks": [
+    "On a cold morning near the harbor, the city sounded different from the way it did in summer. The streets were still busy, but every engine, footstep, and conversation seemed softened by the fog.",
+    "A ferry moved slowly across the gray water while workers carried crates from the market into narrow side streets. Nobody was in a hurry, yet everything kept moving with quiet precision.",
+    "Inside a small recording room above a closed bookstore, Daniel listened to the same sentence again and again.",
+    "He was not looking for a perfect voice; he was looking for a voice that stayed natural when the paragraph became longer. Short samples were easy to impress with, but long passages revealed the truth.",
+    "A model could sound confident for ten seconds and then lose rhythm, swallow consonants, or drift away from the original speaker. He wrote each result into a notebook.",
+    "First came the response time, then the number of chunks, then the total duration of the generated audio. After that he added comments about pacing, breath, emphasis, and fatigue.",
+    "The best system was not always the one with the fastest single request.",
+    "It was the one that remained predictable when several requests arrived at once, and still produced speech that people could listen to without distraction.",
+    "By the afternoon, the fog had lifted and sunlight reached the windows. Daniel played the final sample from beginning to end without touching the keyboard. The voice held together across the whole passage.",
+    "It was not flawless, but it was steady, clear, and fast enough to be useful. That was the result he needed: not a miracle, just a reliable tool that could survive real work."
+  ],
+  "chunk_lengths": [
+    194,
+    185,
+    109,
+    199,
+    166,
+    178,
+    71,
+    154,
+    204,
+    173
+  ],
+  "request_id": "287c8f11-fd99-4286-8148-9cf5616ddc63",
+  "time_to_done_s": 2.5609961660811678,
+  "wall_s": 2.5661082019796595,
+  "audio_info": {
+    "channels": 1,
+    "sample_width": 2,
+    "sample_rate": 24000,
+    "frames": 2437440,
+    "duration_s": 101.56,
+    "chunk_durations_s": [
+      12.04,
+      11.2,
+      6.44,
+      12.64,
+      10.88,
+      12.28,
+      4.28,
+      8.12,
+      12.56,
+      11.12
+    ]
+  },
+  "rtf_wall": 0.025266918097475968,
+  "usage": {
+    "prompt_tokens": 1060,
+    "completion_tokens": 2609,
+    "total_tokens": 3669,
+    "engine_time_s": 18.95044
+  }
+}

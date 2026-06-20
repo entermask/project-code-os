@@ -1,10 +1,10 @@
 # Client Integration Guide
 
-This guide describes how a client should submit many Fish Audio S2 Pro TTS
-requests to the FastAPI wrapper without letting long jobs block short jobs.
+This guide describes how a client should submit many Higgs Audio v3 TTS jobs to
+the FastAPI wrapper without overfilling the backend chunk scheduler.
 
-The current API does not have a separate voice-clone endpoint. Voice cloning is
-done by passing `ref_audio_url` and `ref_text` to `POST /v1/tts`.
+The API has one TTS endpoint. Voice cloning is done by passing `ref_audio_url`
+and `ref_text` to `POST /v1/tts`.
 
 ## Endpoints
 
@@ -38,8 +38,7 @@ GET  /v1/tts/jobs/{request_id}/audio?from=0&chunks=10
   "chunks": ["Text chunk 1.", "Text chunk 2."],
   "ref_audio_url": "https://example.com/reference.wav",
   "ref_text": "Transcript of the reference audio.",
-  "format": "wav",
-  "speed": 1.0,
+  "format": "mp3",
   "temperature": 0.8,
   "top_p": 0.9,
   "seed": 1234
@@ -61,9 +60,9 @@ wav
 mp3
 ```
 
-## Voice Clone Cache
+## Reference Audio Cache
 
-The wrapper automatically caches reference audio by `ref_audio_url`.
+The wrapper caches reference audio on disk by `ref_audio_url`.
 
 For best cache hit rate:
 
@@ -72,37 +71,27 @@ For best cache hit rate:
 - Keep `ref_text` accurate for the reference audio.
 - Reuse the same `ref_audio_url` across all requests for the same voice.
 
-There are two cache layers:
-
-- Wrapper disk cache: avoids downloading the same `ref_audio_url` again.
-- SGLang VQ cache: avoids re-encoding the same local reference audio.
-
-The SGLang VQ cache is controlled by:
-
-```bash
-S2PRO_REF_VQ_CACHE_SIZE=128
-```
-
-If more than 128 voices are active, least-recently-used voices are evicted from
-the VQ cache. This does not fail the request. It only means the evicted voice
-must be encoded again when used later.
+The wrapper passes the cached local `audio_path` plus `ref_text` to
+SGLang-Omni for every chunk request. Do not assume that many different voices
+are permanently cached in VRAM. If production traffic has many voices, route by
+stable `ref_audio_url` or content hash so repeated voices usually land on the
+same node.
 
 ## Warm-Up
 
-For a new voice that will be used by a large job, warm it first with a tiny
-request:
+For a voice that will be used heavily, warm it first with a tiny request:
 
 ```json
 {
   "chunks": ["Hello."],
   "ref_audio_url": "https://example.com/reference.wav",
   "ref_text": "Transcript of the reference audio.",
-  "format": "wav"
+  "format": "mp3"
 }
 ```
 
-This downloads the reference audio and warms SGLang's VQ cache before the long
-job starts.
+This downloads the reference audio and creates the wrapper cache entry before a
+large burst starts.
 
 ## Text Chunking
 
@@ -111,7 +100,7 @@ The client is responsible for splitting input text.
 Recommended chunk size:
 
 ```text
-180-220 characters per chunk
+150-220 characters per chunk
 ```
 
 Rules:
@@ -121,52 +110,30 @@ Rules:
 - Avoid very long chunks because they increase tail latency.
 - Preserve original order with `document_id`, `page_index`, and `chunk_index`.
 
-Example:
+## Current Production Scheduler
+
+The measured sweet spot for the current Higgs Audio v3 deployment is:
 
 ```text
-100,000 chars / 200 chars ~= 500 chunks
+MAX_CONCURRENT_CHUNKS=16
+MAX_IN_FLIGHT_CHUNKS_PER_JOB=10
+BUSY_BACKLOG_CHUNKS=2000
+SHORT_RESERVED_CHUNKS=0
 ```
 
-## Scheduling Policy
+What these mean:
 
-On the current B200 configuration, the server sweet spot is:
+- `MAX_CONCURRENT_CHUNKS`: maximum active backend chunk generations.
+- `MAX_IN_FLIGHT_CHUNKS_PER_JOB`: maximum active chunks from one submitted job.
+- `BUSY_BACKLOG_CHUNKS`: accepted queued/running chunks before the API returns
+  `429`.
+- `SHORT_RESERVED_CHUNKS`: reserved short-request lane. It is disabled in the
+  current throughput-first config.
 
-```text
-MAX_CONCURRENT_CHUNKS=128
-```
-
-Client should not keep all 128 slots occupied with long jobs. Leave room for
-short requests and cold voice-cache work.
-
-Recommended online settings:
-
-```text
-TOTAL_SERVER_CHUNK_SLOTS=128
-LONG_OUTSTANDING_LIMIT=96
-SHORT_RESERVED_CHUNKS=32
-LONG_PAGE_SIZE=16
-MAX_OUTSTANDING_CHUNKS_PER_LONG_DOCUMENT=16
-```
-
-Recommended offline batch settings when no short traffic matters:
-
-```text
-TOTAL_SERVER_CHUNK_SLOTS=128
-LONG_OUTSTANDING_LIMIT=112
-SHORT_RESERVED_CHUNKS=16
-LONG_PAGE_SIZE=32
-MAX_OUTSTANDING_CHUNKS_PER_LONG_DOCUMENT=32
-```
-
-If running on an H200-style `C64` deployment, start lower:
-
-```text
-TOTAL_SERVER_CHUNK_SLOTS=64
-LONG_OUTSTANDING_LIMIT=48
-SHORT_RESERVED_CHUNKS=16
-LONG_PAGE_SIZE=8-16
-MAX_OUTSTANDING_CHUNKS_PER_LONG_DOCUMENT=8-16
-```
+For the current production pattern of 10 chunks per logical TTS request,
+`BUSY_BACKLOG_CHUNKS=2000` accepts about 200 simultaneous jobs before applying
+backpressure. Raising backlog does not make the GPU faster; it only allows more
+queued work before `429`.
 
 ## Request Classes
 
@@ -176,7 +143,7 @@ Short request:
 <= 1000 chars or <= 4 chunks
 ```
 
-Submit immediately. Do not queue behind long jobs on the client side.
+Submit immediately unless `/health` shows high backlog pressure.
 
 Medium request:
 
@@ -184,7 +151,7 @@ Medium request:
 1,000-10,000 chars
 ```
 
-Submit as pages of 16-32 chunks.
+Submit as pages of up to 10 chunks.
 
 Long request:
 
@@ -192,8 +159,8 @@ Long request:
 > 10,000 chars
 ```
 
-Submit as pages of 16 chunks for online workloads, or 32 chunks for offline
-batch workloads.
+Submit pages in round-robin order across documents. Do not submit hundreds of
+chunks for one document while other documents are waiting.
 
 ## Fair Long-Job Submission
 
@@ -204,36 +171,35 @@ Instead, submit pages in a round-robin schedule.
 
 Example: 10 documents, each around 100k chars and 500 chunks.
 
-With `LONG_PAGE_SIZE=16` and `LONG_OUTSTANDING_LIMIT=96`, submit only six pages
-at a time:
+With `LONG_PAGE_SIZE=10` and `LONG_OUTSTANDING_LIMIT=160`, submit only sixteen
+pages at a time:
 
 ```text
-doc_0 chunks 0-15
-doc_1 chunks 0-15
-doc_2 chunks 0-15
-doc_3 chunks 0-15
-doc_4 chunks 0-15
-doc_5 chunks 0-15
+doc_0 chunks 0-9
+doc_1 chunks 0-9
+doc_2 chunks 0-9
+...
+doc_15 chunks 0-9
 ```
 
 That uses:
 
 ```text
-6 * 16 = 96 outstanding long chunks
+16 * 10 = 160 outstanding long chunks
 ```
 
 When one page finishes, submit the next page for the next document:
 
 ```text
-doc_6 chunks 0-15
-doc_0 chunks 16-31
-doc_7 chunks 0-15
-doc_1 chunks 16-31
+doc_16 chunks 0-9
+doc_0 chunks 10-19
+doc_17 chunks 0-9
+doc_1 chunks 10-19
 ...
 ```
 
 This keeps throughput high while preventing one long document from occupying the
-whole server for too long.
+server for too long.
 
 ## Job Lifecycle
 
@@ -354,9 +320,9 @@ type DocumentJob = {
   inFlightChunks: number;
 };
 
-const LONG_OUTSTANDING_LIMIT = 96;
-const LONG_PAGE_SIZE = 16;
-const MAX_PER_DOCUMENT = 16;
+const LONG_OUTSTANDING_LIMIT = 160;
+const LONG_PAGE_SIZE = 10;
+const MAX_PER_DOCUMENT = 10;
 
 let globalLongOutstanding = 0;
 
@@ -396,9 +362,6 @@ async function scheduleLongJobs(queue: DocumentJob[]) {
 }
 ```
 
-Short requests should bypass this long-job loop and use their own small reserved
-budget.
-
 ## TypeScript API Example
 
 ```ts
@@ -420,7 +383,7 @@ async function submitTtsPage(params: {
       chunks: params.chunks,
       ref_audio_url: params.refAudioUrl,
       ref_text: params.refText,
-      format: params.format ?? "wav",
+      format: params.format ?? "mp3",
     }),
   });
 
@@ -521,30 +484,22 @@ if outstanding_chunks >= busy_backlog_chunks * 0.8: slow down
 if 429 rate increases: reduce LONG_OUTSTANDING_LIMIT by 25%
 ```
 
-## Recommended Defaults
+## Recommended Client Defaults
 
-Use these defaults for the current B200 deployment:
+Use these defaults for the current Higgs deployment:
 
 ```text
-chunk_size_chars=200
-long_page_size=16
-medium_page_size=16
-short_submit_direct=true
-global_long_outstanding_chunks=96
-global_short_reserved_chunks=32
-max_outstanding_chunks_per_long_document=16
+chunk_size_chars=150-220
+page_size_chunks=10
+global_long_outstanding_chunks=160
+max_outstanding_chunks_per_document=10
 poll_interval_ms=1000
 retry_429_base_ms=1000
 retry_max_attempts=5
 ```
 
-For offline batch-only throughput:
-
-```text
-long_page_size=32
-global_long_outstanding_chunks=112
-max_outstanding_chunks_per_long_document=32
-```
+For offline batch-only throughput, raise `global_long_outstanding_chunks` toward
+the server backlog limit, but keep each submitted job at about 10 chunks.
 
 ## Main Pitfalls
 
@@ -555,4 +510,4 @@ max_outstanding_chunks_per_long_document=32
 - Do not concatenate WAV files by raw bytes.
 - Do not use `/audio?from=&chunks=` as a generation scheduler. It only controls
   download after completion.
-- Do not let short requests wait behind large batch documents.
+- Do not assume extra VRAM automatically caches many cloned voices.

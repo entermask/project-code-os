@@ -1,0 +1,60 @@
+{
+  "text": "Buổi sáng ở thành phố bắt đầu bằng tiếng xe chạy đều trên mặt đường còn ướt sau cơn mưa đêm. Những quán nhỏ mở cửa sớm, mùi cà phê nóng và bánh mì mới nướng lan ra từ góc phố quen thuộc. Người đi làm bước nhanh hơn một chút, nhưng không khí vẫn có cảm giác dịu lại vì những hàng cây còn đọng nước.\n\nTrong một căn phòng nhỏ trên tầng cao, có người đang chuẩn bị cho một ngày dài. Anh kiểm tra lại danh sách công việc, chỉnh âm lượng chiếc tai nghe, rồi đọc chậm từng dòng ghi chú để chắc rằng không bỏ sót điều gì quan trọng. Bên ngoài cửa sổ, ánh nắng đi qua lớp mây mỏng, rơi xuống bàn thành những vệt sáng nhạt.\n\nCông việc hôm nay không quá phức tạp, nhưng đòi hỏi sự kiên nhẫn. Có những đoạn cần làm nhanh, có những đoạn phải dừng lại kiểm tra từng chi tiết. Nếu vội vàng, kết quả có thể nghe ổn trong vài giây đầu nhưng lại lộ lỗi ở phần sau. Vì vậy anh chọn cách đi từng bước, đo lại thời gian, so sánh các mẫu ngắn và mẫu dài, rồi ghi chú những khác biệt nhỏ nhất.\n\nĐến trưa, nhịp phố trở nên dày hơn. Tiếng nói chuyện, tiếng còi xe và tiếng bước chân hòa vào nhau thành một nền âm thanh quen thuộc. Anh đứng dậy pha thêm nước, nhìn ra ngoài vài phút, rồi quay lại tiếp tục. Mục tiêu không phải là tạo ra một con số thật đẹp, mà là tìm được cấu hình chạy ổn định khi hệ thống chịu tải thực tế.\n\nChiều xuống, các kết quả bắt đầu rõ ràng hơn. Những yêu cầu ngắn phản hồi rất nhanh, gần như không tạo cảm giác chờ đợi. Những đoạn dài cần nhiều chunk hơn, nhưng nếu chia hợp lý thì tổng thời gian vẫn thấp hơn nhiều so với thời lượng âm thanh tạo ra. Điều quan trọng nhất là hệ thống không nghẽn, không mất job, và không cần khởi động lại backend.\n\nKhi mọi thứ đã được ghi lại, anh xuất vài file âm thanh để nghe thử. Một file ngắn dùng để kiểm tra chất giọng và nhịp câu. Một file dài dùng để nghe sự ổn định qua nhiều đoạn liên tiếp. Nếu cả hai đều ổn, phần còn lại chỉ là tinh chỉnh nhỏ: giữ mức song song đủ cao để tận dụng GPU, nhưng không đẩy quá xa khiến hàng đợi khó kiểm soát.",
+  "ref_text": "Veetobhajan kabbu ka hai. O s ki boobtom kisi ortha runi metasaku ka hai. Veetobhakti kabbu ka hai. Tum hari biter bak.",
+  "chunks": [
+    "Buổi sáng ở thành phố bắt đầu bằng tiếng xe chạy đều trên mặt đường còn ướt sau cơn mưa đêm. Những quán nhỏ mở cửa sớm, mùi cà phê nóng và bánh mì mới nướng lan ra từ góc phố quen thuộc.",
+    "Người đi làm bước nhanh hơn một chút, nhưng không khí vẫn có cảm giác dịu lại vì những hàng cây còn đọng nước. Trong một căn phòng nhỏ trên tầng cao, có người đang chuẩn bị cho một ngày dài.",
+    "Anh kiểm tra lại danh sách công việc, chỉnh âm lượng chiếc tai nghe, rồi đọc chậm từng dòng ghi chú để chắc rằng không bỏ sót điều gì quan trọng.",
+    "Bên ngoài cửa sổ, ánh nắng đi qua lớp mây mỏng, rơi xuống bàn thành những vệt sáng nhạt. Công việc hôm nay không quá phức tạp, nhưng đòi hỏi sự kiên nhẫn.",
+    "Có những đoạn cần làm nhanh, có những đoạn phải dừng lại kiểm tra từng chi tiết. Nếu vội vàng, kết quả có thể nghe ổn trong vài giây đầu nhưng lại lộ lỗi ở phần sau.",
+    "Vì vậy anh chọn cách đi từng bước, đo lại thời gian, so sánh các mẫu ngắn và mẫu dài, rồi ghi chú những khác biệt nhỏ nhất. Đến trưa, nhịp phố trở nên dày hơn.",
+    "Tiếng nói chuyện, tiếng còi xe và tiếng bước chân hòa vào nhau thành một nền âm thanh quen thuộc. Anh đứng dậy pha thêm nước, nhìn ra ngoài vài phút, rồi quay lại tiếp tục.",
+    "Mục tiêu không phải là tạo ra một con số thật đẹp, mà là tìm được cấu hình chạy ổn định khi hệ thống chịu tải thực tế. Chiều xuống, các kết quả bắt đầu rõ ràng hơn.",
+    "Những yêu cầu ngắn phản hồi rất nhanh, gần như không tạo cảm giác chờ đợi. Những đoạn dài cần nhiều chunk hơn, nhưng nếu chia hợp lý thì tổng thời gian vẫn thấp hơn nhiều so với thời lượng âm thanh tạo ra.",
+    "Điều quan trọng nhất là hệ thống không nghẽn, không mất job, và không cần khởi động lại backend. Khi mọi thứ đã được ghi lại, anh xuất vài file âm thanh để nghe thử. Một file ngắn dùng để kiểm tra chất giọng và nhịp câu.",
+    "Một file dài dùng để nghe sự ổn định qua nhiều đoạn liên tiếp. Nếu cả hai đều ổn, phần còn lại chỉ là tinh chỉnh nhỏ: giữ mức song song đủ cao để tận dụng GPU, nhưng không đẩy quá xa khiến hàng đợi khó kiểm soát."
+  ],
+  "chunk_lengths": [
+    186,
+    190,
+    145,
+    154,
+    165,
+    159,
+    172,
+    164,
+    205,
+    220,
+    212
+  ],
+  "request_id": "b2344641-5940-4072-883a-059d6a0b3c64",
+  "time_to_done_s": 3.8752898250240833,
+  "wall_s": 3.880973426043056,
+  "audio_info": {
+    "channels": 1,
+    "sample_width": 2,
+    "sample_rate": 24000,
+    "frames": 3095040,
+    "duration_s": 128.96,
+    "chunk_durations_s": [
+      11.88,
+      11.16,
+      8.48,
+      10.24,
+      9.28,
+      20.2,
+      11.84,
+      9.6,
+      11.0,
+      12.12,
+      13.16
+    ]
+  },
+  "rtf_wall": 0.030094396914105582,
+  "usage": {
+    "prompt_tokens": 3659,
+    "completion_tokens": 3301,
+    "total_tokens": 6960,
+    "engine_time_s": 24.225926
+  }
+}
