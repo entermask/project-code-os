@@ -473,6 +473,18 @@ def _strip_higgs_tags(text: str) -> str:
     return _HIGGS_TOKEN_RE.sub("", text).strip()
 
 
+# Tag LẬT GIỌNG dẫn đầu chunk: emotion/style + prosody pitch|expressive. pause/speed/sfx KHÔNG lật.
+_VOICE_FLIP_LEAD_RE = re.compile(
+    r"^\s*<\|(?:(?:emotion|style):[a-z_]+|prosody:(?:pitch|expressive)_[a-z_]+)\|>",
+    re.IGNORECASE,
+)
+
+
+def _starts_with_voice_flip(text: str) -> bool:
+    """True nếu chunk BẮT ĐẦU bằng tag lật giọng → c0 (chỉ có ref slot) dễ lật, cần neo ref."""
+    return bool(_VOICE_FLIP_LEAD_RE.match(text or ""))
+
+
 def _sglang_payload(
     chunk_text: str,
     req: TTSRequest,
@@ -747,28 +759,34 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
             # result.audio_bytes is WAV in multi-turn → lossless context.
             results: list[Any] = []
             tasks = []
-            # Neo trung tính khi có tag LẬT GIỌNG: chain neo vào chunk-liền-trước sẽ kế
-            # thừa giọng đã lật (trôi / đổi giới tính). Thay vào đó dựng 1 mỏ neo TRUNG
-            # TÍNH cố định = chunk0 đã strip hết tag, render 1 lần, rồi neo MỌI chunk vào
-            # nó → khoá giọng, cảm xúc từng chunk vẫn tự do. Render neo fail → fallback chain.
+            # CHỈ neo khi chunk ĐẦU bắt đầu bằng tag LẬT GIỌNG (emotion/style/pitch/expressive):
+            # lúc đó c0 chỉ có ref slot (~ngắn) nên dễ lật. Dựng 1 "chunk vô hình" neutral từ
+            # REF (render ref_text qua ref, 1 lần) làm context cho RIÊNG c0 → khoá giọng c0; c1+
+            # chain chunk-liền-trước bình thường (giọng đã khoá từ c0 → liền mạch, không lật).
+            # chunk1 KHÔNG flip → c0 khỏi neo (ref slot lo), chain thuần. Detect flip ở BRIDGE
+            # (worker khỏi gửi cờ); neo render fail → c0 về ref slot.
             anchor: Optional[tuple[str, bytes]] = None
-            if req.mt_neutral_anchor and req.chunks:
-                neutral_text = _strip_higgs_tags(req.chunks[0])
-                if neutral_text:
+            if req.chunks and _starts_with_voice_flip(req.chunks[0]):
+                logger.info("TTS job %s: chunk1 bắt đầu tag lật giọng → neo c0 vào ref-anchor", request_id)
+                anchor_text = (ref.transcript or "").strip() or _strip_higgs_tags(req.chunks[0])
+                if anchor_text:
                     try:
                         anchor = (
-                            neutral_text,
-                            await _render_anchor(request_id, neutral_text, req, ref, lane, job_semaphore),
+                            anchor_text,
+                            await _render_anchor(request_id, anchor_text, req, ref, lane, job_semaphore),
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
-                            "TTS job %s neutral-anchor render failed: %s; fallback to chain",
+                            "TTS job %s ref-anchor render failed: %s; c0 dùng ref slot",
                             request_id, exc,
                         )
             prev: Optional[tuple[str, bytes]] = None  # (full text, full WAV) of prior chunk
             for index, text in enumerate(req.chunks):
-                # anchor cố định (voice-flip) > chain chunk-trước (K1-full thường).
-                ctx = [anchor] if anchor is not None else ([prev] if prev else None)
+                # c0: neo ref-anchor nếu chunk1 lật giọng, else chỉ ref slot. c1+: chain chunk-trước.
+                if index == 0:
+                    ctx = [anchor] if anchor is not None else None
+                else:
+                    ctx = [prev] if prev else None
                 try:
                     result = await _generate_one_chunk(
                         request_id, index, text, req, ref, output_paths[index],
