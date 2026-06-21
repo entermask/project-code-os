@@ -71,6 +71,10 @@ MAX_NEW_TOKENS_SAFETY = float(os.getenv("MAX_NEW_TOKENS_SAFETY", "1.5"))
 MAX_NEW_TOKENS_BASE = int(os.getenv("MAX_NEW_TOKENS_BASE", "96"))
 MAX_NEW_TOKENS_FLOOR = max(1, int(os.getenv("MAX_NEW_TOKENS_FLOOR", "256")))
 MAX_NEW_TOKENS_CEIL = max(1, int(os.getenv("MAX_NEW_TOKENS_CEIL", "2048")))  # = model default, không vượt
+# Default max_new_tokens của higgs-audio-v3 (theo docs). Dùng cho chunk CÓ context audio
+# (multi-turn): cap động ước theo chars chunk KHÔNG khớp khi có context → model cần nhiều token
+# hơn → đụng cap = false runaway → fail oan. Bỏ cap động ở case này, để model tự dừng (EOS).
+HIGGS_DEFAULT_MAX_NEW_TOKENS = max(1, int(os.getenv("HIGGS_DEFAULT_MAX_NEW_TOKENS", "2048")))
 # Sampling mặc định cho higgs. Worker không gửi → sgl-omni mặc định temp=1.0, top_p/top_k TẮT =
 # phân bố khuếch tán → dễ kẹt "silence attractor" (không sample được EOC) → runaway câm. Theo ref
 # boson voice-clone (temp 0.8 / top_k 50 / top_p 0.95). top_k>=50 để EOC không bị mask khỏi top-k.
@@ -521,9 +525,12 @@ def _sglang_payload(
         value = getattr(req, field)
         if value is not None:
             payload[field] = value
-    # Cap động theo chunk nếu request không tự chỉ định → chặn runaway (default model 2048 ≈ 82s).
+    # max_new_tokens nếu request không tự chỉ định:
+    #  - CÓ context audio (multi-turn): cap động ước SAI (model + context cần nhiều token hơn estimate
+    #    → đụng cap = false runaway → fail oan) → dùng default higgs v3 2048, để model tự dừng (EOS).
+    #  - KHÔNG context (single-turn): giữ cap động → chặn runaway sớm (~3-4× nhu cầu).
     if req.max_new_tokens is None:
-        payload["max_new_tokens"] = _estimate_max_new_tokens(chunk_text)
+        payload["max_new_tokens"] = HIGGS_DEFAULT_MAX_NEW_TOKENS if context else _estimate_max_new_tokens(chunk_text)
     # Sampling mặc định khi client không gửi → tránh phân bố khuếch tán (temp=1.0, no top_p/top_k)
     # vốn dễ dẫn tới silence-attractor không emit EOC. setdefault → tôn trọng override của client.
     payload.setdefault("temperature", HIGGS_TEMPERATURE)
