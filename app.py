@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import hashlib
+import io
 import json
 import logging
 import os
@@ -8,6 +10,7 @@ import re
 import shutil
 import time
 import uuid
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -74,6 +77,11 @@ MAX_NEW_TOKENS_CEIL = max(1, int(os.getenv("MAX_NEW_TOKENS_CEIL", "2048")))  # =
 HIGGS_TEMPERATURE = float(os.getenv("HIGGS_TEMPERATURE", "0.8"))
 HIGGS_TOP_P = float(os.getenv("HIGGS_TOP_P", "0.95"))
 HIGGS_TOP_K = int(os.getenv("HIGGS_TOP_K", "50"))
+# Natural/multi-turn: ground each chunk on the last N seconds of audio already
+# produced in this job (audio only, NO text — empirically cleaner). The window
+# spans chunk boundaries, so a tiny prior chunk ("OK.") auto-merges with the one
+# before it to fill the window.
+MT_CONTEXT_TAIL_SEC = float(os.getenv("MT_CONTEXT_TAIL_SEC", "6"))
 _DENSE_CHAR_RE = re.compile("[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]")  # CJK/kana/Hangul/fullwidth
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
@@ -125,6 +133,15 @@ class TTSRequest(BaseModel):
     top_k: Optional[int] = None
     repetition_penalty: Optional[float] = None
     seed: Optional[int] = None
+    # Natural/multi-turn: generate chunks sequentially, grounding each on the
+    # last MT_CONTEXT_TAIL_SEC of audio already produced this job (audio-only).
+    # Consistent voice across the job; slower per-job (no chunk parallelism);
+    # requires the multi-turn sgl-omni build.
+    multi_turn: bool = False
+    # Tag LẬT GIỌNG (emotion/style/pitch/expressive) kéo giọng của chain trôi/đổi giới
+    # tính. Khi True: neo MỌI chunk vào 1 mỏ neo TRUNG TÍNH cố định (chunk0 đã strip hết
+    # tag) thay vì chunk-liền-trước đã lật → khoá giọng, vẫn để cảm xúc từng chunk tự do.
+    mt_neutral_anchor: bool = False
 
 
 @dataclass
@@ -414,10 +431,59 @@ async def _wav_to_mp3(wav_bytes: bytes) -> bytes:
     return stdout
 
 
-def _sglang_payload(chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry) -> dict[str, Any]:
+def _wav_seconds(wav_bytes: bytes) -> float:
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as r:
+            return r.getnframes() / float(r.getframerate())
+    except Exception:
+        return 0.0
+
+
+def _wav_concat_tail(wavs: list[bytes], seconds: float) -> Optional[bytes]:
+    """Concatenate WAV chunks (chronological) and return the last `seconds` as a
+    WAV. Spans chunk boundaries, so a tiny trailing chunk merges with earlier
+    ones to fill the window. Returns None if nothing decodable."""
+    params = None
+    frames = bytearray()
+    for w in wavs:
+        try:
+            with wave.open(io.BytesIO(w), "rb") as r:
+                if params is None:
+                    params = r.getparams()
+                frames += r.readframes(r.getnframes())
+        except Exception:
+            continue
+    if params is None or not frames:
+        return None
+    frame_size = params.nchannels * params.sampwidth
+    keep_bytes = int(seconds * params.framerate) * frame_size
+    tail = bytes(frames[-keep_bytes:]) if 0 < keep_bytes < len(frames) else bytes(frames)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as o:
+        o.setparams(params)
+        o.writeframes(tail)
+    return buf.getvalue()
+
+
+_HIGGS_TOKEN_RE = re.compile(r"<\|[a-z_]+:[a-z_]+\|>", re.IGNORECASE)
+
+
+def _strip_higgs_tags(text: str) -> str:
+    """Bỏ MỌI token điều khiển <|cat:tag|> → text trung tính (dựng neutral anchor)."""
+    return _HIGGS_TOKEN_RE.sub("", text).strip()
+
+
+def _sglang_payload(
+    chunk_text: str,
+    req: TTSRequest,
+    ref: ReferenceCacheEntry,
+    context: Optional[list[tuple[str, bytes]]] = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "input": chunk_text,
-        "response_format": req.format,
+        # Multi-turn keeps chunks as WAV internally so the rolling context window
+        # can be concatenated/trimmed losslessly; output is re-encoded later.
+        "response_format": "wav" if req.multi_turn else req.format,
         "references": [
             {
                 "audio_path": str(ref.audio_path),
@@ -425,6 +491,18 @@ def _sglang_payload(chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry) 
             }
         ],
     }
+    # Multi-turn grounding: prior (text, audio) turns sent via stage_params (a
+    # first-class sgl-omni field) so the engine interleaves them before the
+    # current text. Audio is encoded server-side by the audio_encoder stage.
+    if context:
+        payload["stage_params"] = {
+            "preprocessing": {
+                "context": [
+                    {"text": t, "audio": {"base64": base64.b64encode(a).decode()}}
+                    for t, a in context
+                ]
+            }
+        }
     if SPEECH_MODEL:
         payload["model"] = SPEECH_MODEL
     for field in OPTIONAL_SGLANG_FIELDS:
@@ -483,8 +561,9 @@ async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
 
 async def _call_sglang(
     chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry, seed_override: Optional[int] = None,
+    context: Optional[list[tuple[str, bytes]]] = None,
 ) -> ChunkResult:
-    payload = _sglang_payload(chunk_text, req, ref)
+    payload = _sglang_payload(chunk_text, req, ref, context=context)
     if seed_override is not None:
         payload["seed"] = seed_override
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -505,7 +584,8 @@ async def _call_sglang(
         engine_time_s=_header_float(response.headers, "x-engine-time"),
     )
 
-    if req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
+    # Multi-turn keeps WAV (re-encoded to req.format when writing the chunk file).
+    if not req.multi_turn and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
         result.audio_bytes = await _wav_to_mp3(audio_bytes)
 
     # Audio rỗng/quá nhỏ = chunk gần-câm/cụt → coi là lỗi để retry (xem _generate_one_chunk).
@@ -546,6 +626,7 @@ async def _call_sglang_with_retry(
     text: str,
     req: TTSRequest,
     ref: ReferenceCacheEntry,
+    context: Optional[list[tuple[str, bytes]]] = None,
 ) -> ChunkResult:
     last_exc: Optional[BaseException] = None
     for attempt in range(1, CHUNK_RETRY_ATTEMPTS + 1):
@@ -553,7 +634,7 @@ async def _call_sglang_with_retry(
             # Attempt đầu dùng seed tự nhiên; retry ĐỔI seed để thoát runaway/silent (sampling fluke,
             # cùng seed thường câm lại). seed=None ở lần đầu → giữ hành vi mặc định của backend.
             seed_override = None if attempt == 1 else random.randint(1, 2_147_483_647)
-            return await _call_sglang(text, req, ref, seed_override=seed_override)
+            return await _call_sglang(text, req, ref, seed_override=seed_override, context=context)
         except Exception as exc:
             last_exc = exc
             if attempt < CHUNK_RETRY_ATTEMPTS:
@@ -575,14 +656,20 @@ async def _generate_one_chunk(
     output_path: Path,
     lane: str,
     job_semaphore: asyncio.Semaphore,
-) -> Path:
+    context: Optional[list[tuple[str, bytes]]] = None,
+) -> ChunkResult:
     async with job_semaphore:
         async with _lane_semaphore(lane):
-            result = await _call_sglang_with_retry(request_id, chunk_index, text, req, ref)
+            result = await _call_sglang_with_retry(request_id, chunk_index, text, req, ref, context=context)
+            # Multi-turn keeps result.audio_bytes as WAV (for the context window);
+            # the chunk FILE still needs req.format. Re-encode only for the write.
+            file_bytes = result.audio_bytes
+            if req.multi_turn and req.format == "mp3" and _is_wav(file_bytes):
+                file_bytes = await _wav_to_mp3(file_bytes)
             # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
             tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
             try:
-                tmp_path.write_bytes(result.audio_bytes)
+                tmp_path.write_bytes(file_bytes)
                 os.replace(tmp_path, output_path)
             except BaseException:
                 if tmp_path.exists():
@@ -599,7 +686,24 @@ async def _generate_one_chunk(
             job.total_tokens = job.prompt_tokens + job.completion_tokens
             job.engine_time_s += result.engine_time_s
             job.updated_at = time.time()
-    return output_path
+    return result
+
+
+async def _render_anchor(
+    request_id: str,
+    text: str,
+    req: TTSRequest,
+    ref: ReferenceCacheEntry,
+    lane: str,
+    job_semaphore: asyncio.Semaphore,
+) -> bytes:
+    """Render 1 đoạn TRUNG TÍNH (đã strip tag) làm mỏ neo cố định cho multi-turn khi có
+    tag lật giọng. Trả WAV bytes (multi_turn giữ WAV); KHÔNG ghi file chunk. Có retry
+    chống runaway/silent như chunk thường (chunk_index=-1 chỉ để log)."""
+    async with job_semaphore:
+        async with _lane_semaphore(lane):
+            result = await _call_sglang_with_retry(request_id, -1, text, req, ref, context=None)
+    return result.audio_bytes
 
 
 async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
@@ -631,11 +735,56 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
 
         lane = job.lane if job else _request_lane(req)
         job_semaphore = asyncio.Semaphore(min(MAX_IN_FLIGHT_CHUNKS_PER_JOB, len(req.chunks)))
-        tasks = [
-            asyncio.create_task(_generate_one_chunk(request_id, index, text, req, ref, output_paths[index], lane, job_semaphore))
-            for index, text in enumerate(req.chunks)
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        if req.multi_turn:
+            # Natural mode: chunks run SEQUENTIALLY, each grounded on the
+            # immediately-prior chunk as a FULL text↔audio PAIR (K1-full). This
+            # mirrors Higgs' official long-form format (generation.py keeps every
+            # turn as a (user text, assistant audio) pair, pruned 2:1) — the
+            # transcript must stay paired with its audio. Audio-only or tail-
+            # trimmed context breaks that pairing and makes the model drift or
+            # re-read (text says more than the clipped audio contains).
+            # result.audio_bytes is WAV in multi-turn → lossless context.
+            results: list[Any] = []
+            tasks = []
+            # Neo trung tính khi có tag LẬT GIỌNG: chain neo vào chunk-liền-trước sẽ kế
+            # thừa giọng đã lật (trôi / đổi giới tính). Thay vào đó dựng 1 mỏ neo TRUNG
+            # TÍNH cố định = chunk0 đã strip hết tag, render 1 lần, rồi neo MỌI chunk vào
+            # nó → khoá giọng, cảm xúc từng chunk vẫn tự do. Render neo fail → fallback chain.
+            anchor: Optional[tuple[str, bytes]] = None
+            if req.mt_neutral_anchor and req.chunks:
+                neutral_text = _strip_higgs_tags(req.chunks[0])
+                if neutral_text:
+                    try:
+                        anchor = (
+                            neutral_text,
+                            await _render_anchor(request_id, neutral_text, req, ref, lane, job_semaphore),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "TTS job %s neutral-anchor render failed: %s; fallback to chain",
+                            request_id, exc,
+                        )
+            prev: Optional[tuple[str, bytes]] = None  # (full text, full WAV) of prior chunk
+            for index, text in enumerate(req.chunks):
+                # anchor cố định (voice-flip) > chain chunk-trước (K1-full thường).
+                ctx = [anchor] if anchor is not None else ([prev] if prev else None)
+                try:
+                    result = await _generate_one_chunk(
+                        request_id, index, text, req, ref, output_paths[index],
+                        lane, job_semaphore, context=ctx,
+                    )
+                    results.append(result)
+                    prev = (text, result.audio_bytes)
+                except Exception as exc:  # noqa: BLE001 — surfaced via shared handler below
+                    results.append(exc)
+                    break
+        else:
+            tasks = [
+                asyncio.create_task(_generate_one_chunk(request_id, index, text, req, ref, output_paths[index], lane, job_semaphore))
+                for index, text in enumerate(req.chunks)
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
         errors = [result for result in results if isinstance(result, BaseException)]
         completed_outputs = sum(1 for path in output_paths if path.exists())
 
