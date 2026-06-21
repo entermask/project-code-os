@@ -71,10 +71,18 @@ MAX_NEW_TOKENS_SAFETY = float(os.getenv("MAX_NEW_TOKENS_SAFETY", "1.5"))
 MAX_NEW_TOKENS_BASE = int(os.getenv("MAX_NEW_TOKENS_BASE", "96"))
 MAX_NEW_TOKENS_FLOOR = max(1, int(os.getenv("MAX_NEW_TOKENS_FLOOR", "256")))
 MAX_NEW_TOKENS_CEIL = max(1, int(os.getenv("MAX_NEW_TOKENS_CEIL", "2048")))  # = model default, không vượt
-# Default max_new_tokens của higgs-audio-v3 (theo docs). Dùng cho chunk CÓ context audio
-# (multi-turn): cap động ước theo chars chunk KHÔNG khớp khi có context → model cần nhiều token
-# hơn → đụng cap = false runaway → fail oan. Bỏ cap động ở case này, để model tự dừng (EOS).
+# Default max_new_tokens của higgs-audio-v3 (theo docs) = trần trên cho chunk có context.
 HIGGS_DEFAULT_MAX_NEW_TOKENS = max(1, int(os.getenv("HIGGS_DEFAULT_MAX_NEW_TOKENS", "2048")))
+# KV cache (thinker) chứa CẢ input LẪN generation: input_tokens + max_new_tokens phải ≤ kv_capacity,
+# nếu không SGLang trả HTTP 500 "requires more tokens than KV cache can hold". Multi-turn context
+# audio ăn input RẤT lớn (đo thực ~2459) → KHÔNG thể dùng higgs default 2048 (2459+2048>4095=tràn).
+# Chunk CÓ context: cap max_new = kv_capacity − reserve(input) → vừa KV mà vẫn rộng hơn cap động cũ.
+# Nếu context thực to hơn reserve → reactive refit từ thông số trong lỗi 500 (xem _call_sglang_with_retry).
+KV_CACHE_CAPACITY = max(1, int(os.getenv("KV_CACHE_CAPACITY", "4095")))
+KV_INPUT_RESERVE = max(1, int(os.getenv("KV_INPUT_RESERVE", "2560")))   # chừa cho ref+context+text input
+KV_SAFETY_MARGIN = max(0, int(os.getenv("KV_SAFETY_MARGIN", "128")))
+# Parse lỗi KV overflow của SGLang: "...input_tokens=2459...kv_capacity=4095..." → refit max_new.
+_KV_OVERFLOW_RE = re.compile(r"input_tokens=(\d+).*?kv_capacity=(\d+)", re.IGNORECASE)
 # Sampling mặc định cho higgs. Worker không gửi → sgl-omni mặc định temp=1.0, top_p/top_k TẮT =
 # phân bố khuếch tán → dễ kẹt "silence attractor" (không sample được EOC) → runaway câm. Theo ref
 # boson voice-clone (temp 0.8 / top_k 50 / top_p 0.95). top_k>=50 để EOC không bị mask khỏi top-k.
@@ -526,11 +534,16 @@ def _sglang_payload(
         if value is not None:
             payload[field] = value
     # max_new_tokens nếu request không tự chỉ định:
-    #  - CÓ context audio (multi-turn): cap động ước SAI (model + context cần nhiều token hơn estimate
-    #    → đụng cap = false runaway → fail oan) → dùng default higgs v3 2048, để model tự dừng (EOS).
+    #  - CÓ context audio (multi-turn): cap theo KV (kv_capacity − reserve input), KHÔNG dùng 2048
+    #    (input context lớn → 2048 tràn KV → HTTP 500). Vẫn rộng hơn cap động cũ (chống cắt cụt);
+    #    false-runaway-flag TẮT cho context (xem _call_sglang) vì cap bị KV giới hạn, không đủ rộng
+    #    cho heuristic. Context to hơn reserve → reactive refit (xem _call_sglang_with_retry).
     #  - KHÔNG context (single-turn): giữ cap động → chặn runaway sớm (~3-4× nhu cầu).
     if req.max_new_tokens is None:
-        payload["max_new_tokens"] = HIGGS_DEFAULT_MAX_NEW_TOKENS if context else _estimate_max_new_tokens(chunk_text)
+        if context:
+            payload["max_new_tokens"] = max(MAX_NEW_TOKENS_FLOOR, min(HIGGS_DEFAULT_MAX_NEW_TOKENS, KV_CACHE_CAPACITY - KV_INPUT_RESERVE))
+        else:
+            payload["max_new_tokens"] = _estimate_max_new_tokens(chunk_text)
     # Sampling mặc định khi client không gửi → tránh phân bố khuếch tán (temp=1.0, no top_p/top_k)
     # vốn dễ dẫn tới silence-attractor không emit EOC. setdefault → tôn trọng override của client.
     payload.setdefault("temperature", HIGGS_TEMPERATURE)
@@ -580,11 +593,13 @@ async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
 
 async def _call_sglang(
     chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry, seed_override: Optional[int] = None,
-    context: Optional[list[tuple[str, bytes]]] = None,
+    context: Optional[list[tuple[str, bytes]]] = None, max_new_override: Optional[int] = None,
 ) -> ChunkResult:
     payload = _sglang_payload(chunk_text, req, ref, context=context)
     if seed_override is not None:
         payload["seed"] = seed_override
+    if max_new_override is not None:  # reactive KV-fit (retry sau lỗi KV overflow)
+        payload["max_new_tokens"] = max_new_override
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         response = await client.post(f"{SGLANG_BASE_URL}/v1/audio/speech", json=payload)
 
@@ -617,9 +632,13 @@ async def _call_sglang(
     # Bắt được CẢ câm-toàn-phần LẪN "đọc một đoạn rồi câm tới hết cap" (max_volume bỏ sót vì có tiếng
     # ở đầu). Chỉ áp khi cap do wrapper tự đặt (req.max_new_tokens None) và cap < ceil model → tránh
     # nhầm chunk dài hợp lệ chạm trần thật. Retry đổi seed (xem _call_sglang_with_retry).
+    # CHỈ cho single-turn (context is None): cap động đủ rộng nên chạm cap = runaway thật. Context
+    # chunk: cap bị KV giới hạn (không rộng được) → chạm cap có thể là chunk dài hợp lệ, KHÔNG flag
+    # (tránh fail oan như bug 2048); silent runaway vẫn bắt qua volumedetect bên dưới.
     cap = payload.get("max_new_tokens")
     if (
         req.max_new_tokens is None
+        and context is None
         and isinstance(cap, int)
         and cap < MAX_NEW_TOKENS_CEIL
         and result.completion_tokens >= cap * 0.95
@@ -648,17 +667,30 @@ async def _call_sglang_with_retry(
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> ChunkResult:
     last_exc: Optional[BaseException] = None
+    max_new_override: Optional[int] = None  # set khi KV overflow → thu nhỏ max_new vừa KV cho retry
     for attempt in range(1, CHUNK_RETRY_ATTEMPTS + 1):
         try:
             # Attempt đầu dùng seed tự nhiên; retry ĐỔI seed để thoát runaway/silent (sampling fluke,
             # cùng seed thường câm lại). seed=None ở lần đầu → giữ hành vi mặc định của backend.
             seed_override = None if attempt == 1 else random.randint(1, 2_147_483_647)
-            return await _call_sglang(text, req, ref, seed_override=seed_override, context=context)
+            return await _call_sglang(
+                text, req, ref, seed_override=seed_override, context=context, max_new_override=max_new_override,
+            )
         except Exception as exc:
             last_exc = exc
+            # KV overflow (input_tokens + max_new_tokens > kv_capacity): đổi seed VÔ DỤNG (deterministic)
+            # → thu nhỏ max_new = kv_capacity − input − margin rồi retry cho vừa KV.
+            m = _KV_OVERFLOW_RE.search(str(exc))
+            if m:
+                input_tok, kv_cap = int(m.group(1)), int(m.group(2))
+                max_new_override = max(MAX_NEW_TOKENS_FLOOR, kv_cap - input_tok - KV_SAFETY_MARGIN)
+                logger.warning(
+                    "TTS job %s chunk %d KV overflow (input=%d, kv=%d) → refit max_new=%d",
+                    request_id, chunk_index, input_tok, kv_cap, max_new_override,
+                )
             if attempt < CHUNK_RETRY_ATTEMPTS:
                 logger.warning(
-                    "TTS job %s chunk %d attempt %d/%d failed: %s; retrying with new seed",
+                    "TTS job %s chunk %d attempt %d/%d failed: %s; retrying",
                     request_id, chunk_index, attempt, CHUNK_RETRY_ATTEMPTS, exc,
                 )
                 await asyncio.sleep(CHUNK_RETRY_BASE_DELAY * attempt)
