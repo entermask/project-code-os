@@ -71,7 +71,7 @@ def api(tmp_path, monkeypatch):
     async def fake_download(ref_audio_url, target):
         target.write_bytes(b"fake reference audio")
 
-    async def fake_call_sglang(chunk_text, req, ref, seed_override=None):
+    async def fake_call_sglang(chunk_text, req, ref, seed_override=None, **_kwargs):
         assert ref.audio_path.exists()
         assert ref.transcript == "reference transcript"
         return module.ChunkResult(
@@ -162,7 +162,7 @@ async def test_submit_poll_and_download_audio(client):
 
 @pytest.mark.asyncio
 async def test_download_audio_range(client, api, monkeypatch):
-    async def fake_call_sglang(chunk_text, req, ref, seed_override=None):
+    async def fake_call_sglang(chunk_text, req, ref, seed_override=None, **_kwargs):
         return api.ChunkResult(audio_bytes=labeled_wav_bytes(chunk_text))
 
     monkeypatch.setattr(api, "_call_sglang", fake_call_sglang)
@@ -196,6 +196,49 @@ async def test_download_audio_range(client, api, monkeypatch):
     chunks = parse_framed_audio(audio.content)
     assert len(chunks) == 1
     assert chunks[0].endswith(b"second")
+
+
+@pytest.mark.asyncio
+async def test_streamed_range_downloads_become_eligible_for_cleanup(client, api, monkeypatch):
+    import time
+
+    monkeypatch.setattr(api, "STREAMED_JOB_TTL_SECONDS", 0)
+    job_dir = api.JOB_DIR / "stream-cleanup-job"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    paths = [job_dir / f"chunk_{i:05d}.wav" for i in range(2)]
+    paths[0].write_bytes(labeled_wav_bytes("first"))
+    paths[1].write_bytes(labeled_wav_bytes("second"))
+
+    now = time.time()
+    job = api.TTSJob(
+        request_id="stream-cleanup-job",
+        status="succeeded",
+        created_at=now,
+        updated_at=now,
+        format="wav",
+        chunks_total=2,
+        chunks_completed=2,
+        chunk_paths=paths,
+        chunk_media_type="audio/wav",
+        cleanup_paths=[job_dir],
+    )
+    async with api.jobs_lock:
+        api.jobs[job.request_id] = job
+
+    url = "/v1/tts/jobs/stream-cleanup-job/audio"
+    first = await client.get(f"{url}?from=0&chunks=1", headers=auth_headers())
+    assert first.status_code == 200
+    await api._cleanup_expired_jobs()
+    async with api.jobs_lock:
+        assert "stream-cleanup-job" in api.jobs
+    assert job_dir.exists()
+
+    second = await client.get(f"{url}?from=1&chunks=1", headers=auth_headers())
+    assert second.status_code == 200
+    await api._cleanup_expired_jobs()
+    async with api.jobs_lock:
+        assert "stream-cleanup-job" not in api.jobs
+    assert not job_dir.exists()
 
 
 @pytest.mark.asyncio
@@ -257,7 +300,7 @@ async def test_audio_progressive_contiguous_gating(client, api):
 async def test_chunk_retry_recovers_transient_error(client, api, monkeypatch):
     calls = {"n": 0}
 
-    async def flaky_call_sglang(chunk_text, req, ref, seed_override=None):
+    async def flaky_call_sglang(chunk_text, req, ref, seed_override=None, **_kwargs):
         calls["n"] += 1
         if calls["n"] < 2:
             raise RuntimeError("transient sglang error")
@@ -407,7 +450,12 @@ def test_job_payload_includes_audio_url_only_when_succeeded(api):
     )
     assert "audio_url" not in api._job_payload(job)
     job.status = "succeeded"
+    job.chunk_paths = [api.Path("/tmp/chunk.wav")]
     assert api._job_payload(job)["audio_url"] == "/v1/tts/jobs/abc/audio"
+    job.chunk_paths = None
+    payload = api._job_payload(job)
+    assert "audio_url" not in payload
+    assert payload["audio_expired"] is True
 
 
 @pytest.mark.asyncio
@@ -426,7 +474,7 @@ async def test_retry_varies_seed_on_silent_chunk(api, monkeypatch):
     seeds = []
     calls = {"n": 0}
 
-    async def fake_call(chunk_text, req, ref, seed_override=None):
+    async def fake_call(chunk_text, req, ref, seed_override=None, **_kwargs):
         calls["n"] += 1
         seeds.append(seed_override)
         if calls["n"] == 1:

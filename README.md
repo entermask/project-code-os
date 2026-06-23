@@ -46,6 +46,44 @@ source "$HOME/venvs/sglang-tts-api/bin/activate"
 Install SGLang-Omni separately in its own environment following the upstream
 Higgs Audio v3 model card or SGLang-Omni docs.
 
+## GPUHub Production Layout
+
+For GPUHub hosts, keep model/runtime files on the system disk and keep only
+generated/reference audio on the data disk:
+
+```text
+system:
+  /root/.cache/huggingface    # Higgs model cache
+  /root/sglang-omni           # SGLang-Omni checkout and venv
+
+data:
+  /root/autodl-tmp/tts-cache  # ref audio, transcripts, job audio, tmp files
+```
+
+Apply the production `.env` defaults after cloning:
+
+```bash
+./scripts/apply_gpuhub_layout.sh
+```
+
+The script sets:
+
+```text
+PORT=6006
+API_TOKEN=change-me
+HF_HOME=/root/.cache/huggingface
+TTS_CACHE_DIR=/root/autodl-tmp/tts-cache
+SGLANG_ALLOWED_LOCAL_MEDIA_PATH=/root/autodl-tmp/tts-cache
+STREAMED_JOB_TTL_SECONDS=60
+JOB_CLEANUP_INTERVAL_SECONDS=30
+STREAM_CHUNK_SIZE_BYTES=4194304
+```
+
+`STREAM_CHUNK_SIZE_BYTES` is the HTTP file-read block size for `/audio`
+downloads, not TTS text chunking. `4194304` is 4 MiB, which is a good default on
+the current 110 GB RAM GPUHub hosts: lower syscall overhead than 1 MiB without
+large per-download buffers.
+
 ## Backend
 
 `scripts/run_sglang.sh` defaults to Higgs Audio v3:
