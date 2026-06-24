@@ -505,19 +505,22 @@ def test_estimate_max_new_tokens_dynamic(api):
 
 
 @pytest.mark.asyncio
-async def test_cap_hit_detected_as_runaway(tmp_path, monkeypatch):
-    # Reload riêng để gọi _call_sglang THẬT (fixture `api` thay nó bằng fake).
+async def test_call_sglang_annotates_completeness_bands(tmp_path, monkeypatch):
+    # _call_sglang KHÔNG raise quality issue nữa: chỉ GẮN quality_issue (early_eos/runaway/silent)
+    # để best-effort retry xử lý. Reload riêng để gọi _call_sglang THẬT (fixture `api` thay nó).
     import importlib
     from pathlib import Path as _P
     monkeypatch.setenv("API_TOKEN", "test-token")
     monkeypatch.setenv("TTS_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("CHUNK_MIN_BYTES", "0")
-    monkeypatch.setenv("CHUNK_SILENCE_MAX_DBFS", "-100")
+    monkeypatch.setenv("CHUNK_SILENCE_MAX_DBFS", "-100")  # tắt volumedetect cho test
     monkeypatch.setenv("CHUNK_RETRY_BASE_DELAY", "0")
     api = importlib.reload(importlib.import_module("app"))
     text = "a" * 150
     cap = api._estimate_max_new_tokens(text)
+    expected = api._expected_tokens(text)
     assert cap < api.MAX_NEW_TOKENS_CEIL
+    assert expected >= api.EARLY_EOS_MIN_EXPECTED_TOKENS
 
     class FakeResp:
         def __init__(self, ct):
@@ -538,13 +541,54 @@ async def test_cap_hit_detected_as_runaway(tmp_path, monkeypatch):
     req = api.TTSRequest(chunks=[text], ref_audio_url="https://x/y.wav", ref_text="t", format="wav")
     ref = api.ReferenceCacheEntry(audio_path=_P("/tmp/none"), transcript="t", audio_cache_hit=True)
 
-    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(cap))      # chạm cap → runaway
-    with pytest.raises(RuntimeError, match="EOS-runaway"):
-        await api._call_sglang(text, req, ref)
-
-    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(int(cap * 0.4)))  # dưới cap → ok
+    # đọc THIẾU (early-EOS): completion << kỳ vọng → quality_issue, KHÔNG raise
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(int(expected * 0.3)))
     res = await api._call_sglang(text, req, ref)
-    assert res.completion_tokens == int(cap * 0.4)
+    assert res.quality_issue == "early_eos"
+    assert res.expected_tokens == expected
+
+    # band giữa: audio hoàn chỉnh → không issue
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(int(expected * 0.9)))
+    res = await api._call_sglang(text, req, ref)
+    assert res.quality_issue is None
+
+    # chạm cap: runaway (đuôi câm) → quality_issue, KHÔNG raise
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(cap))
+    res = await api._call_sglang(text, req, ref)
+    assert res.quality_issue == "runaway"
+
+
+@pytest.mark.asyncio
+async def test_retry_returns_best_effort_after_exhaust(api, monkeypatch):
+    # Hết lượt re-render mà chunk vẫn còn issue → trả BEST-EFFORT: bản đọc được NHIỀU nhất, và
+    # bản CÂM (is_silent) không bao giờ được ưu tiên (điểm 0). Worker luôn nhận audio.
+    from pathlib import Path as _Path
+    monkeypatch.setattr(api, "CHUNK_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(api, "CHUNK_RETRY_BASE_DELAY", 0.0)
+    # (issue, completion_tokens, is_silent) cho 3 lần thử; câm 250-token KHÔNG được chọn.
+    attempts = [("early_eos", 120, False), ("silent", 250, True), ("early_eos", 90, False)]
+    calls = {"n": 0}
+
+    async def fake_call(chunk_text, req, ref, seed_override=None, **_kwargs):
+        i = calls["n"]; calls["n"] += 1
+        issue, ct, silent = attempts[i]
+        return api.ChunkResult(
+            audio_bytes=labeled_wav_bytes(f"try{i}"),
+            completion_tokens=ct,
+            expected_tokens=300,
+            quality_issue=issue,
+            is_silent=silent,
+        )
+
+    monkeypatch.setattr(api, "_call_sglang", fake_call)
+    req = api.TTSRequest(chunks=["x"], ref_audio_url="https://x/y.wav", ref_text="t")
+    ref = api.ReferenceCacheEntry(audio_path=_Path("/tmp/none"), transcript="t", audio_cache_hit=True)
+
+    res = await api._call_sglang_with_retry("job", 1, "x", req, ref)
+    assert calls["n"] == 3                      # thử hết 3 lần (không sạch lần nào)
+    assert res.quality_issue == "early_eos"     # best-effort: vẫn còn issue nhưng có audio
+    assert res.completion_tokens == 120         # chọn bản đọc nhiều nhất, BỎ bản câm 250-token
+    assert res.audio_bytes.endswith(b"try0")
 
 
 def test_sglang_payload_sets_sampling_defaults(api):
@@ -553,9 +597,16 @@ def test_sglang_payload_sets_sampling_defaults(api):
     req = api.TTSRequest(chunks=["hi"], ref_audio_url="https://x/y.wav", ref_text="t")
     p = api._sglang_payload("hello world there", req, ref)
     assert p["temperature"] == api.HIGGS_TEMPERATURE
-    assert p["top_p"] == api.HIGGS_TOP_P
     assert p["top_k"] == api.HIGGS_TOP_K
     assert "max_new_tokens" in p
+    # top_p MẶC ĐỊNH v3 = unset → KHÔNG inject khi HIGGS_TOP_P để trống; có inject khi env set.
+    if api.HIGGS_TOP_P is None:
+        assert "top_p" not in p
+    else:
+        assert p["top_p"] == api.HIGGS_TOP_P
+    # client override top_p luôn được tôn trọng dù default là unset
+    req_tp = api.TTSRequest(chunks=["hi"], ref_audio_url="https://x/y.wav", ref_text="t", top_p=0.85)
+    assert api._sglang_payload("hello", req_tp, ref)["top_p"] == 0.85
     # client override được tôn trọng
     req2 = api.TTSRequest(chunks=["hi"], ref_audio_url="https://x/y.wav", ref_text="t", temperature=0.3)
     assert api._sglang_payload("hello", req2, ref)["temperature"] == 0.3

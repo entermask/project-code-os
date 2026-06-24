@@ -69,12 +69,18 @@ CHUNK_SILENCE_MAX_DBFS = float(os.getenv("CHUNK_SILENCE_MAX_DBFS", "-50"))
 # cắt cụt chunk thật, nhưng chặn runaway (default 2048 ≈ 82s) xuống sát nhu cầu (~3-4× với latin).
 TOK_PER_CHAR_LATIN = float(os.getenv("TOK_PER_CHAR_LATIN", "2.0"))
 TOK_PER_CHAR_DENSE = float(os.getenv("TOK_PER_CHAR_DENSE", "6.0"))   # CJK + Hangul + kana
-MAX_NEW_TOKENS_SAFETY = float(os.getenv("MAX_NEW_TOKENS_SAFETY", "1.5"))
+MAX_NEW_TOKENS_SAFETY = float(os.getenv("MAX_NEW_TOKENS_SAFETY", "2.0"))
 MAX_NEW_TOKENS_BASE = int(os.getenv("MAX_NEW_TOKENS_BASE", "96"))
 MAX_NEW_TOKENS_FLOOR = max(1, int(os.getenv("MAX_NEW_TOKENS_FLOOR", "256")))
 MAX_NEW_TOKENS_CEIL = max(1, int(os.getenv("MAX_NEW_TOKENS_CEIL", "2048")))  # = model default, không vượt
 # Default max_new_tokens của higgs-audio-v3 (theo docs) = trần trên cho chunk có context.
 HIGGS_DEFAULT_MAX_NEW_TOKENS = max(1, int(os.getenv("HIGGS_DEFAULT_MAX_NEW_TOKENS", "2048")))
+# "CHẶN DƯỚI" (early-EOS / đọc THIẾU chữ): model phát EOS sớm → audio HỢP LỆ nhưng CỤT (có tiếng,
+# chưa chạm cap → qua hết gate trên) → worker nhận đoạn thiếu. Bắt bằng completion_tokens thực <
+# EARLY_EOS_RATIO × kỳ vọng-token-từ-text (codec 25 fps). Re-render đổi seed (EOS sớm là fluke
+# sampling, seed khác thường đọc trọn). Chỉ áp khi text đủ dài để tránh false-pos ở chunk ngắn.
+EARLY_EOS_RATIO = float(os.getenv("EARLY_EOS_RATIO", "0.5"))
+EARLY_EOS_MIN_EXPECTED_TOKENS = max(1, int(os.getenv("EARLY_EOS_MIN_EXPECTED_TOKENS", "96")))
 # KV cache (thinker) chứa CẢ input LẪN generation: input_tokens + max_new_tokens phải ≤ kv_capacity,
 # nếu không SGLang trả HTTP 500 "requires more tokens than KV cache can hold". Multi-turn context
 # audio ăn input RẤT lớn (đo thực ~2459) → KHÔNG thể dùng higgs default 2048 (2459+2048>4095=tràn).
@@ -86,10 +92,15 @@ KV_SAFETY_MARGIN = max(0, int(os.getenv("KV_SAFETY_MARGIN", "128")))
 # Parse lỗi KV overflow của SGLang: "...input_tokens=2459...kv_capacity=4095..." → refit max_new.
 _KV_OVERFLOW_RE = re.compile(r"input_tokens=(\d+).*?kv_capacity=(\d+)", re.IGNORECASE)
 # Sampling mặc định cho higgs. Worker không gửi → sgl-omni mặc định temp=1.0, top_p/top_k TẮT =
-# phân bố khuếch tán → dễ kẹt "silence attractor" (không sample được EOC) → runaway câm. Theo ref
-# boson voice-clone (temp 0.8 / top_k 50 / top_p 0.95). top_k>=50 để EOC không bị mask khỏi top-k.
+# phân bố khuếch tán → dễ kẹt "silence attractor" (không sample được EOC) → runaway câm.
+# temp=0.8 + top_k=50 là 2 đòn bẩy ổn định CHÍNH, khớp ref boson voice-clone + model card v3.
+# top_p: MẶC ĐỊNH của higgs v3 = UNSET (nucleus OFF — xem sgl-omni cookbook `top_p|float|null` và
+# sampler.py: nucleus chỉ áp khi top_p is not None and < 1.0). 0.95 là giá trị legacy v2/example,
+# KHÔNG phải default v3. Để TRỐNG HIGGS_TOP_P → KHÔNG gửi top_p (đúng default model). Đặt số (vd
+# 0.95) chỉ khi muốn bật lại nucleus như đòn anti-silence-attractor.
 HIGGS_TEMPERATURE = float(os.getenv("HIGGS_TEMPERATURE", "0.8"))
-HIGGS_TOP_P = float(os.getenv("HIGGS_TOP_P", "0.95"))
+_HIGGS_TOP_P_ENV = os.getenv("HIGGS_TOP_P", "").strip()
+HIGGS_TOP_P: Optional[float] = float(_HIGGS_TOP_P_ENV) if _HIGGS_TOP_P_ENV else None
 HIGGS_TOP_K = int(os.getenv("HIGGS_TOP_K", "50"))
 # Natural/multi-turn: ground each chunk on the last N seconds of audio already
 # produced in this job (audio only, NO text — empirically cleaner). The window
@@ -100,13 +111,26 @@ _DENSE_CHAR_RE = re.compile("[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
 
-def _estimate_max_new_tokens(text: str) -> int:
-    """Cap động theo độ dài/script chunk: đủ dư cho audio thật, chặn runaway sát nhu cầu thực."""
+def _expected_tokens(text: str) -> int:
+    """Kỳ vọng số audio-token cho text (codec Higgs 25 fps). Dùng cho cap động VÀ cho
+    'chặn dưới' early-EOS (đọc thiếu): completion_tokens thực << kỳ vọng = model đọc cụt."""
     dense = len(_DENSE_CHAR_RE.findall(text))
     other = max(0, len(text) - dense)
-    est = dense * TOK_PER_CHAR_DENSE + other * TOK_PER_CHAR_LATIN
-    cap = int(est * MAX_NEW_TOKENS_SAFETY) + MAX_NEW_TOKENS_BASE
+    return int(dense * TOK_PER_CHAR_DENSE + other * TOK_PER_CHAR_LATIN)
+
+
+def _estimate_max_new_tokens(text: str) -> int:
+    """Cap động theo độ dài/script chunk: đủ dư cho audio thật, chặn runaway sát nhu cầu thực."""
+    cap = int(_expected_tokens(text) * MAX_NEW_TOKENS_SAFETY) + MAX_NEW_TOKENS_BASE
     return max(MAX_NEW_TOKENS_FLOOR, min(MAX_NEW_TOKENS_CEIL, cap))
+
+
+def _escalated_max_new_tokens(context: Optional[list] = None) -> int:
+    """Trần token RỘNG NHẤT cho lần re-render: single-turn → ceil model (2048); chunk có context →
+    sát KV (kv_capacity − reserve input). Cho chunk dài bị cắt ở attempt 1 có chỗ đọc trọn lần sau."""
+    if context:
+        return max(MAX_NEW_TOKENS_FLOOR, min(HIGGS_DEFAULT_MAX_NEW_TOKENS, KV_CACHE_CAPACITY - KV_INPUT_RESERVE))
+    return MAX_NEW_TOKENS_CEIL
 
 SUPPORTED_FORMATS = {"wav", "mp3"}
 SUPPORTED_REF_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
@@ -171,6 +195,11 @@ class ChunkResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     engine_time_s: float = 0.0
+    # Completeness annotations: set bởi _call_sglang, dùng bởi best-effort retry. quality_issue None
+    # = audio hoàn chỉnh; 'early_eos' (đọc thiếu) | 'runaway' (đuôi câm) | 'silent' (câm toàn phần).
+    quality_issue: Optional[str] = None
+    is_silent: bool = False
+    expected_tokens: int = 0
 
 
 @dataclass
@@ -183,6 +212,9 @@ class TTSJob:
     chunks_total: int
     chunks_completed: int = 0
     chunks_failed: int = 0
+    # Chunk hoàn thành nhưng phải lấy BEST-EFFORT (issue early_eos/runaway/silent vẫn còn sau khi
+    # đã re-render hết lượt). Đếm để theo dõi chất lượng / calib ngưỡng; không tính là fail.
+    chunks_degraded: int = 0
     input_chars: int = 0
     lane: str = "default"
     detail: Optional[str] = None
@@ -552,7 +584,10 @@ def _sglang_payload(
     # Sampling mặc định khi client không gửi → tránh phân bố khuếch tán (temp=1.0, no top_p/top_k)
     # vốn dễ dẫn tới silence-attractor không emit EOC. setdefault → tôn trọng override của client.
     payload.setdefault("temperature", HIGGS_TEMPERATURE)
-    payload.setdefault("top_p", HIGGS_TOP_P)
+    # top_p MẶC ĐỊNH higgs v3 = unset (nucleus OFF) → chỉ gửi khi HIGGS_TOP_P được set qua env,
+    # hoặc khi client tự gửi top_p (đã add ở vòng OPTIONAL_SGLANG_FIELDS bên trên).
+    if HIGGS_TOP_P is not None:
+        payload.setdefault("top_p", HIGGS_TOP_P)
     payload.setdefault("top_k", HIGGS_TOP_K)
     return payload
 
@@ -627,38 +662,48 @@ async def _call_sglang(
     if not req.multi_turn and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
         result.audio_bytes = await _wav_to_mp3(audio_bytes)
 
-    # Audio rỗng/quá nhỏ = chunk gần-câm/cụt → coi là lỗi để retry (xem _generate_one_chunk).
+    # Audio rỗng/quá nhỏ = không có audio dùng được → hard-fail để retry (xem _generate_one_chunk).
     if CHUNK_MIN_BYTES and len(result.audio_bytes) < CHUNK_MIN_BYTES:
         raise RuntimeError(
             f"SGLang returned undersized audio ({len(result.audio_bytes)} bytes < {CHUNK_MIN_BYTES})."
         )
 
-    # Runaway EOS (tín hiệu CHÍNH, miễn phí): model không emit EOS → chạy tới đúng max_new_tokens.
-    # Bắt được CẢ câm-toàn-phần LẪN "đọc một đoạn rồi câm tới hết cap" (max_volume bỏ sót vì có tiếng
-    # ở đầu). Chỉ áp khi cap do wrapper tự đặt (req.max_new_tokens None) và cap < ceil model → tránh
-    # nhầm chunk dài hợp lệ chạm trần thật. Retry đổi seed (xem _call_sglang_with_retry).
-    # CHỈ cho single-turn (context is None): cap động đủ rộng nên chạm cap = runaway thật. Context
-    # chunk: cap bị KV giới hạn (không rộng được) → chạm cap có thể là chunk dài hợp lệ, KHÔNG flag
-    # (tránh fail oan như bug 2048); silent runaway vẫn bắt qua volumedetect bên dưới.
+    # Completeness: KHÔNG raise (trừ undersized ở trên). Chỉ GẮN quality_issue/is_silent rồi
+    # _call_sglang_with_retry re-render (đổi seed / nâng max_new) tới khi sạch, hết lượt thì lấy
+    # bản best-effort. Worker yêu cầu MỌI chunk có audio hoàn chỉnh → không bao giờ skip/partial.
+    result.expected_tokens = _expected_tokens(chunk_text)
     cap = payload.get("max_new_tokens")
+
+    # CHẶN DƯỚI (early-EOS / đọc THIẾU chữ) — tín hiệu CHÍNH cho "mất chữ". Model phát EOS sớm:
+    # audio có tiếng + chưa chạm cap → lọt mọi gate cũ → worker nhận đoạn cụt. Bắt bằng
+    # completion_tokens thực << kỳ vọng. Chỉ khi wrapper tự quản token (req.max_new_tokens None) và
+    # text đủ dài (expected >= ngưỡng) để tránh false-pos ở chunk ngắn/biến thiên token cao.
     if (
         req.max_new_tokens is None
+        and result.expected_tokens >= EARLY_EOS_MIN_EXPECTED_TOKENS
+        and 0 < result.completion_tokens < result.expected_tokens * EARLY_EOS_RATIO
+    ):
+        result.quality_issue = "early_eos"
+
+    # CHẶN TRÊN (runaway EOS): không emit EOS → chạy tới đúng cap (audio size hợp lệ nhưng đuôi câm).
+    # Chỉ single-turn (context is None): cap động đủ rộng nên chạm cap = runaway thật. Chunk có context
+    # cap bị KV giới hạn → chạm cap có thể là chunk dài hợp lệ, KHÔNG flag (silent runaway vẫn bắt dưới).
+    if (
+        result.quality_issue is None
+        and req.max_new_tokens is None
         and context is None
         and isinstance(cap, int)
         and cap < MAX_NEW_TOKENS_CEIL
         and result.completion_tokens >= cap * 0.95
     ):
-        raise RuntimeError(
-            f"hit max_new_tokens cap ({result.completion_tokens}/{cap}); EOS-runaway → retry seed"
-        )
+        result.quality_issue = "runaway"
 
-    # Backstop: câm-toàn-phần mà vẫn emit EOS sớm (không chạm cap) → đo âm lượng.
+    # Backstop câm-toàn-phần (đo âm lượng peak). Set is_silent để best-effort KHÔNG ưu tiên bản câm.
     if CHUNK_SILENCE_MAX_DBFS > -90:
         max_db = await _max_volume_dbfs(result.audio_bytes)
         if max_db is not None and max_db < CHUNK_SILENCE_MAX_DBFS:
-            raise RuntimeError(
-                f"silent audio output (max_volume {max_db:.1f} dBFS < {CHUNK_SILENCE_MAX_DBFS}); likely EOS-runaway"
-            )
+            result.is_silent = True
+            result.quality_issue = "silent"
 
     return result
 
@@ -673,12 +718,16 @@ async def _call_sglang_with_retry(
 ) -> ChunkResult:
     last_exc: Optional[BaseException] = None
     max_new_override: Optional[int] = None  # set khi KV overflow → thu nhỏ max_new vừa KV cho retry
+    best: Optional[ChunkResult] = None      # ứng viên best-effort (chunk có audio nhưng còn issue)
+    best_score = -1.0
     for attempt in range(1, CHUNK_RETRY_ATTEMPTS + 1):
+        # Attempt đầu dùng seed tự nhiên; retry ĐỔI seed (early-EOS/runaway/silent thường là fluke
+        # sampling, cùng seed hay lặp lại) + NÂNG max_new lên trần (chunk dài bị cắt có chỗ đọc trọn).
+        seed_override = None if attempt == 1 else random.randint(1, 2_147_483_647)
+        if attempt > 1 and max_new_override is None:
+            max_new_override = _escalated_max_new_tokens(context)
         try:
-            # Attempt đầu dùng seed tự nhiên; retry ĐỔI seed để thoát runaway/silent (sampling fluke,
-            # cùng seed thường câm lại). seed=None ở lần đầu → giữ hành vi mặc định của backend.
-            seed_override = None if attempt == 1 else random.randint(1, 2_147_483_647)
-            return await _call_sglang(
+            result = await _call_sglang(
                 text, req, ref, seed_override=seed_override, context=context, max_new_override=max_new_override,
             )
         except Exception as exc:
@@ -695,10 +744,43 @@ async def _call_sglang_with_retry(
                 )
             if attempt < CHUNK_RETRY_ATTEMPTS:
                 logger.warning(
-                    "TTS job %s chunk %d attempt %d/%d failed: %s; retrying",
+                    "TTS job %s chunk %d attempt %d/%d hard-failed: %s; retrying",
                     request_id, chunk_index, attempt, CHUNK_RETRY_ATTEMPTS, exc,
                 )
                 await asyncio.sleep(CHUNK_RETRY_BASE_DELAY * attempt)
+            continue
+
+        if result.quality_issue is None:
+            return result  # audio hoàn chỉnh
+
+        # Còn issue → giữ làm ứng viên best-effort. Điểm = số token ĐỌC THẬT (bản câm = 0 để không
+        # bao giờ ưu tiên), cap ở kỳ vọng để runaway-đuôi-câm không thắng bản early-EOS đọc sạch.
+        score = 0.0 if result.is_silent else float(
+            min(result.completion_tokens, result.expected_tokens or result.completion_tokens)
+        )
+        if score > best_score:
+            best_score, best = score, result
+        last_exc = RuntimeError(
+            f"chunk quality issue '{result.quality_issue}' "
+            f"(completion={result.completion_tokens}, expected={result.expected_tokens})"
+        )
+        if attempt < CHUNK_RETRY_ATTEMPTS:
+            logger.warning(
+                "TTS job %s chunk %d attempt %d/%d issue=%s (completion=%d/expected=%d); re-render",
+                request_id, chunk_index, attempt, CHUNK_RETRY_ATTEMPTS,
+                result.quality_issue, result.completion_tokens, result.expected_tokens,
+            )
+            await asyncio.sleep(CHUNK_RETRY_BASE_DELAY * attempt)
+
+    # Hết lượt mà chưa sạch: trả BEST-EFFORT (worker luôn cần audio cho mọi chunk). Chỉ hard-fail
+    # khi KHÔNG có bản nào dùng được (toàn hard-error/undersized) → để worker retry cả job.
+    if best is not None:
+        logger.warning(
+            "TTS job %s chunk %d: best-effort sau %d lần (issue=%s, completion=%d/expected=%d)",
+            request_id, chunk_index, CHUNK_RETRY_ATTEMPTS,
+            best.quality_issue, best.completion_tokens, best.expected_tokens,
+        )
+        return best
     assert last_exc is not None
     raise last_exc
 
@@ -737,6 +819,8 @@ async def _generate_one_chunk(
         job = jobs.get(request_id)
         if job is not None:
             job.chunks_completed += 1
+            if result.quality_issue is not None:  # về được nhưng là best-effort (vẫn còn issue)
+                job.chunks_degraded += 1
             job.prompt_tokens += result.prompt_tokens
             job.completion_tokens += result.completion_tokens
             job.total_tokens = job.prompt_tokens + job.completion_tokens
@@ -903,6 +987,7 @@ def _job_payload(job: TTSJob) -> dict[str, Any]:
         "chunks_total": job.chunks_total,
         "chunks_completed": job.chunks_completed,
         "chunks_failed": job.chunks_failed,
+        "chunks_degraded": job.chunks_degraded,
         "input_chars": job.input_chars,
         "lane": job.lane,
         "format": job.format,
