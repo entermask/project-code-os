@@ -64,11 +64,19 @@ CHUNK_MIN_BYTES = max(0, int(os.getenv("CHUNK_MIN_BYTES", "512")))
 # (byte-size không bắt được). Đo max_volume: nếu < ngưỡng này (dBFS) coi là câm → retry seed khác.
 # Speech thật có peak > -20dB nên -50 tách sạch. Đặt <= -90 để TẮT kiểm tra.
 CHUNK_SILENCE_MAX_DBFS = float(os.getenv("CHUNK_SILENCE_MAX_DBFS", "-50"))
-# Dynamic max_new_tokens theo độ dài + script của chunk (codec Higgs = 25 fps; xem docs higgs_tts).
-# Đo thực: latin ~1.4-1.66 tok/char, Hangul ~3.6, CJK ~4.8-5.1. Dùng rate + margin RỘNG để không
-# cắt cụt chunk thật, nhưng chặn runaway (default 2048 ≈ 82s) xuống sát nhu cầu (~3-4× với latin).
-TOK_PER_CHAR_LATIN = float(os.getenv("TOK_PER_CHAR_LATIN", "2.0"))
-TOK_PER_CHAR_DENSE = float(os.getenv("TOK_PER_CHAR_DENSE", "6.0"))   # CJK + Hangul + kana
+# audio-token/char THEO TỪNG SCRIPT (codec Higgs 25 fps). ĐO THỰC trên model (chunk ngắn đọc sạch):
+# Han(Trung) ~6.1, Kana(Nhật) ~4.8, Hangul(Hàn) ~3.7, Arabic ~2.9, Thai ~2.33, Devanagari(Hindi) ~2.27,
+# Cyrillic ~2.1, Latin/Việt ~1.4-1.66. Phân loại 2-nhóm cũ (dense 6.0 / latin 2.0) quá thô: OVER cho
+# Hàn/Nhật/Việt, UNDER cho Arabic/Thai/Hindi. Để hơi-cao (an toàn): cap clamp 2048 đằng nào cũng OK,
+# còn sub-split & early-EOS bắn TRƯỚC khi cụt. Dùng cho cap động, early-EOS threshold, và sub-split gate.
+TOK_PER_CHAR_LATIN = float(os.getenv("TOK_PER_CHAR_LATIN", "2.0"))            # default: latin/cyrillic/khác
+TOK_PER_CHAR_HAN = float(os.getenv("TOK_PER_CHAR_HAN", "6.0"))                # CJK ideographs (Trung/kanji)
+TOK_PER_CHAR_KANA = float(os.getenv("TOK_PER_CHAR_KANA", "4.8"))             # hiragana/katakana (Nhật)
+TOK_PER_CHAR_HANGUL = float(os.getenv("TOK_PER_CHAR_HANGUL", "3.8"))          # Hàn
+TOK_PER_CHAR_ARABIC = float(os.getenv("TOK_PER_CHAR_ARABIC", "3.0"))          # Arabic abjad
+TOK_PER_CHAR_THAI = float(os.getenv("TOK_PER_CHAR_THAI", "2.5"))              # Thai
+TOK_PER_CHAR_DEVANAGARI = float(os.getenv("TOK_PER_CHAR_DEVANAGARI", "2.4"))  # Hindi
+TOK_PER_CHAR_DENSE = float(os.getenv("TOK_PER_CHAR_DENSE", "6.0"))            # (giữ tương thích env cũ)
 MAX_NEW_TOKENS_SAFETY = float(os.getenv("MAX_NEW_TOKENS_SAFETY", "2.0"))
 MAX_NEW_TOKENS_BASE = int(os.getenv("MAX_NEW_TOKENS_BASE", "96"))
 MAX_NEW_TOKENS_FLOOR = max(1, int(os.getenv("MAX_NEW_TOKENS_FLOOR", "256")))
@@ -81,6 +89,14 @@ HIGGS_DEFAULT_MAX_NEW_TOKENS = max(1, int(os.getenv("HIGGS_DEFAULT_MAX_NEW_TOKEN
 # sampling, seed khác thường đọc trọn). Chỉ áp khi text đủ dài để tránh false-pos ở chunk ngắn.
 EARLY_EOS_RATIO = float(os.getenv("EARLY_EOS_RATIO", "0.5"))
 EARLY_EOS_MIN_EXPECTED_TOKENS = max(1, int(os.getenv("EARLY_EOS_MIN_EXPECTED_TOKENS", "96")))
+# Sub-split fallback (LƯỚI AN TOÀN cuối): sgl-omni KHÔNG tự chia — mỗi /v1/audio/speech là 1 generation,
+# vượt trần max_new → CẮT CỤT ÂM THẦM (finished_reason=length). Nếu _expected_tokens(chunk) > effective_cap
+# (single-turn 2048; multi-turn KV≈1535), reseed VÔ DỤNG (không nhét >82s vào trần) → wrapper tự tách chunk
+# ở ranh giới câu, render từng phần, NỐI WAV, giữ 1:1 (1 file/chunk, vô hình với worker & /audio). Gate bằng
+# expected > cap nên 99% chunk đúng cỡ KHÔNG vào nhánh này; runaway-mà-đáng-lẽ-vừa do reseed lo (không split).
+SUBSPLIT_ENABLE = os.getenv("SUBSPLIT_ENABLE", "1").strip().lower() not in ("0", "false", "no", "")
+SUBSPLIT_TARGET_RATIO = float(os.getenv("SUBSPLIT_TARGET_RATIO", "0.7"))  # sub-part ≤ ratio×cap (chừa headroom)
+SUBSPLIT_MAX_PARTS = max(2, int(os.getenv("SUBSPLIT_MAX_PARTS", "8")))    # chặn fan-out vô hạn
 # KV cache (thinker) chứa CẢ input LẪN generation: input_tokens + max_new_tokens phải ≤ kv_capacity,
 # nếu không SGLang trả HTTP 500 "requires more tokens than KV cache can hold". Multi-turn context
 # audio ăn input RẤT lớn (đo thực ~2459) → KHÔNG thể dùng higgs default 2048 (2459+2048>4095=tràn).
@@ -107,16 +123,32 @@ HIGGS_TOP_K = int(os.getenv("HIGGS_TOP_K", "50"))
 # spans chunk boundaries, so a tiny prior chunk ("OK.") auto-merges with the one
 # before it to fill the window.
 MT_CONTEXT_TAIL_SEC = float(os.getenv("MT_CONTEXT_TAIL_SEC", "6"))
-_DENSE_CHAR_RE = re.compile("[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]")  # CJK/kana/Hangul/fullwidth
+# Per-script ranges \u0111\u1ec3 \u01b0\u1edbc l\u01b0\u1ee3ng token (rate \u1edf TOK_PER_CHAR_*). KH\u00d4NG ch\u1ed3ng l\u1ea5n; k\u00fd t\u1ef1 kh\u00f4ng kh\u1edbp
+# (latin, cyrillic, d\u1ea5u c\u00e2u, CJK-punct \u3000-\u303f, fullwidth) \u2192 default TOK_PER_CHAR_LATIN.
+_RE_HAN = re.compile("[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")        # CJK ideographs (Trung/kanji)
+_RE_KANA = re.compile("[\u3040-\u30ff\u31f0-\u31ff]")                     # hiragana + katakana (Nh\u1eadt)
+_RE_HANGUL = re.compile("[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")     # H\u00e0n
+_RE_ARABIC = re.compile("[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
+_RE_THAI = re.compile("[\u0e00-\u0e7f]")
+_RE_DEVANAGARI = re.compile("[\u0900-\u097f]")
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
 
 def _expected_tokens(text: str) -> int:
-    """Kỳ vọng số audio-token cho text (codec Higgs 25 fps). Dùng cho cap động VÀ cho
-    'chặn dưới' early-EOS (đọc thiếu): completion_tokens thực << kỳ vọng = model đọc cụt."""
-    dense = len(_DENSE_CHAR_RE.findall(text))
-    other = max(0, len(text) - dense)
-    return int(dense * TOK_PER_CHAR_DENSE + other * TOK_PER_CHAR_LATIN)
+    """Kỳ vọng audio-token cho text (codec 25 fps), TÍNH THEO SCRIPT (rate đo thực, xem TOK_PER_CHAR_*).
+    Dùng cho cap động, 'chặn dưới' early-EOS, và sub-split gate. Rate hơi cao = an toàn (bắn sớm)."""
+    han = len(_RE_HAN.findall(text))
+    kana = len(_RE_KANA.findall(text))
+    hangul = len(_RE_HANGUL.findall(text))
+    arabic = len(_RE_ARABIC.findall(text))
+    thai = len(_RE_THAI.findall(text))
+    deva = len(_RE_DEVANAGARI.findall(text))
+    other = max(0, len(text) - (han + kana + hangul + arabic + thai + deva))
+    return int(
+        han * TOK_PER_CHAR_HAN + kana * TOK_PER_CHAR_KANA + hangul * TOK_PER_CHAR_HANGUL
+        + arabic * TOK_PER_CHAR_ARABIC + thai * TOK_PER_CHAR_THAI + deva * TOK_PER_CHAR_DEVANAGARI
+        + other * TOK_PER_CHAR_LATIN
+    )
 
 
 def _estimate_max_new_tokens(text: str) -> int:
@@ -131,6 +163,55 @@ def _escalated_max_new_tokens(context: Optional[list] = None) -> int:
     if context:
         return max(MAX_NEW_TOKENS_FLOOR, min(HIGGS_DEFAULT_MAX_NEW_TOKENS, KV_CACHE_CAPACITY - KV_INPUT_RESERVE))
     return MAX_NEW_TOKENS_CEIL
+
+
+# Ranh giới câu cho sub-split (giữ delimiter). Ưu tiên: kết câu → mệnh đề/khoảng trắng → cắt cứng.
+_SUBSPLIT_PRIMARY_RE = re.compile(r"(?<=[。．！？!?;；\n])")
+_SUBSPLIT_SECONDARY_RE = re.compile(r"(?<=[、，,：:）)」』】\s])")
+
+
+def _subsplit_pack(units: list[str], target: int) -> list[str]:
+    """Gói các unit liên tiếp thành sub-part sao cho _expected_tokens mỗi part ≤ target."""
+    parts: list[str] = []
+    cur = ""
+    for u in units:
+        if not u:
+            continue
+        if cur and _expected_tokens(cur + u) > target:
+            parts.append(cur)
+            cur = u
+        else:
+            cur += u
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def _subsplit_oversized(unit: str, target: int) -> list[str]:
+    """1 câu đơn vẫn > target (câu dài không dấu): tách theo ranh giới phụ, cuối cùng cắt cứng theo
+    số ký tự ước tính cho `target` token."""
+    out: list[str] = []
+    for p in _subsplit_pack([s for s in _SUBSPLIT_SECONDARY_RE.split(unit) if s], target):
+        if _expected_tokens(p) <= target or len(p) <= 1:
+            out.append(p)
+            continue
+        rate = _expected_tokens(p) / len(p)            # token/char thực của đúng đoạn này
+        n = max(1, int(target / max(0.1, rate)))
+        out.extend(p[i:i + n] for i in range(0, len(p), n))
+    return out
+
+
+def _split_for_subchunk(text: str, target: int) -> list[str]:
+    """Tách text thành các sub-part ≤ target token, ưu tiên ranh giới câu (script-aware)."""
+    units: list[str] = []
+    for u in _SUBSPLIT_PRIMARY_RE.split(text):
+        if not u:
+            continue
+        if _expected_tokens(u) > target:
+            units.extend(_subsplit_oversized(u, target))
+        else:
+            units.append(u)
+    return _subsplit_pack(units, target)
 
 SUPPORTED_FORMATS = {"wav", "mp3"}
 SUPPORTED_REF_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
@@ -514,6 +595,27 @@ def _wav_concat_tail(wavs: list[bytes], seconds: float) -> Optional[bytes]:
     return buf.getvalue()
 
 
+def _wav_concat_all(wavs: list[bytes]) -> Optional[bytes]:
+    """Nối TOÀN BỘ WAV (chronological) thành 1 WAV — dùng cho sub-split. None nếu không decode được."""
+    params = None
+    frames = bytearray()
+    for w in wavs:
+        try:
+            with wave.open(io.BytesIO(w), "rb") as r:
+                if params is None:
+                    params = r.getparams()
+                frames += r.readframes(r.getnframes())
+        except Exception:
+            continue
+    if params is None or not frames:
+        return None
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as o:
+        o.setparams(params)
+        o.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
 _HIGGS_TOKEN_RE = re.compile(r"<\|[a-z_]+:[a-z_]+\|>", re.IGNORECASE)
 
 
@@ -634,8 +736,11 @@ async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
 async def _call_sglang(
     chunk_text: str, req: TTSRequest, ref: ReferenceCacheEntry, seed_override: Optional[int] = None,
     context: Optional[list[tuple[str, bytes]]] = None, max_new_override: Optional[int] = None,
+    force_wav: bool = False,
 ) -> ChunkResult:
     payload = _sglang_payload(chunk_text, req, ref, context=context)
+    if force_wav:  # sub-split cần WAV để nối PCM lossless (chuyển mp3 1 lần sau khi đã nối)
+        payload["response_format"] = "wav"
     if seed_override is not None:
         payload["seed"] = seed_override
     if max_new_override is not None:  # reactive KV-fit (retry sau lỗi KV overflow)
@@ -658,8 +763,8 @@ async def _call_sglang(
         engine_time_s=_header_float(response.headers, "x-engine-time"),
     )
 
-    # Multi-turn keeps WAV (re-encoded to req.format when writing the chunk file).
-    if not req.multi_turn and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
+    # Multi-turn (và sub-split force_wav) giữ WAV (re-encode sang req.format khi ghi file / sau khi nối).
+    if not force_wav and not req.multi_turn and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
         result.audio_bytes = await _wav_to_mp3(audio_bytes)
 
     # Audio rỗng/quá nhỏ = không có audio dùng được → hard-fail để retry (xem _generate_one_chunk).
@@ -715,6 +820,7 @@ async def _call_sglang_with_retry(
     req: TTSRequest,
     ref: ReferenceCacheEntry,
     context: Optional[list[tuple[str, bytes]]] = None,
+    force_wav: bool = False,
 ) -> ChunkResult:
     last_exc: Optional[BaseException] = None
     max_new_override: Optional[int] = None  # set khi KV overflow → thu nhỏ max_new vừa KV cho retry
@@ -728,7 +834,8 @@ async def _call_sglang_with_retry(
             max_new_override = _escalated_max_new_tokens(context)
         try:
             result = await _call_sglang(
-                text, req, ref, seed_override=seed_override, context=context, max_new_override=max_new_override,
+                text, req, ref, seed_override=seed_override, context=context,
+                max_new_override=max_new_override, force_wav=force_wav,
             )
         except Exception as exc:
             last_exc = exc
@@ -785,6 +892,72 @@ async def _call_sglang_with_retry(
     raise last_exc
 
 
+async def _render_chunk(
+    request_id: str,
+    chunk_index: int,
+    text: str,
+    req: TTSRequest,
+    ref: ReferenceCacheEntry,
+    context: Optional[list[tuple[str, bytes]]] = None,
+) -> ChunkResult:
+    """Render 1 chunk → 1 ChunkResult, GIỮ 1:1. Đường thường: gọi thẳng _call_sglang_with_retry.
+    LƯỚI AN TOÀN: nếu _expected_tokens(text) > trần token 1 generation (sgl-omni KHÔNG tự chia →
+    vượt trần = cắt cụt âm thầm, reseed vô dụng), tách câu → render từng sub-part → NỐI WAV → 1 file."""
+    effective_cap = _escalated_max_new_tokens(context)
+    if (
+        not SUBSPLIT_ENABLE
+        or req.max_new_tokens is not None            # client tự quản token → tôn trọng, không tách
+        or _expected_tokens(text) <= effective_cap
+    ):
+        return await _call_sglang_with_retry(request_id, chunk_index, text, req, ref, context=context)
+
+    target = max(MAX_NEW_TOKENS_FLOOR, int(SUBSPLIT_TARGET_RATIO * effective_cap))
+    parts = _split_for_subchunk(text, target)
+    if len(parts) <= 1 or len(parts) > SUBSPLIT_MAX_PARTS:
+        # Không tách được hữu ích (1 phần) hoặc fan-out quá lớn → 1 call best-effort (reseed/runaway lo).
+        logger.warning(
+            "TTS job %s chunk %d sub-split bỏ qua (parts=%d, exp=%d > cap=%d, max=%d); 1 call best-effort",
+            request_id, chunk_index, len(parts), _expected_tokens(text), effective_cap, SUBSPLIT_MAX_PARTS,
+        )
+        return await _call_sglang_with_retry(request_id, chunk_index, text, req, ref, context=context)
+
+    logger.info(
+        "TTS job %s chunk %d vượt trần (exp=%d > cap=%d) → sub-split %d phần",
+        request_id, chunk_index, _expected_tokens(text), effective_cap, len(parts),
+    )
+    wavs: list[bytes] = []
+    prompt_tokens = completion_tokens = 0
+    engine_time = 0.0
+    sub_ctx = context  # multi-turn: chain các sub-part để giữ giọng liền MẠCH trong chunk
+    for part in parts:
+        # Mỗi sub-part qua _call_sglang_with_retry (thừa hưởng early_eos/runaway/silent + reseed +
+        # best-effort). Hard-fail sau hết retry → raise → CẢ chunk fail (KHÔNG ghi file cụt một phần).
+        res = await _call_sglang_with_retry(
+            request_id, chunk_index, part, req, ref, context=sub_ctx, force_wav=True,
+        )
+        wavs.append(res.audio_bytes)
+        prompt_tokens += res.prompt_tokens
+        completion_tokens += res.completion_tokens
+        engine_time += res.engine_time_s
+        if context is not None:  # chỉ chain khi multi-turn (single-turn giữ sub-part độc lập)
+            sub_ctx = [(part, res.audio_bytes)]
+
+    joined = _wav_concat_all(wavs)
+    if joined is None:
+        raise RuntimeError(f"sub-split chunk {chunk_index}: nối WAV rỗng (sub-part không decode được)")
+    # Trả ĐÚNG format như đường thường: single-turn mp3 → mp3 (re-encode 1 lần sau khi nối, tránh
+    # artifact biên frame mp3); còn lại giữ WAV (file-write trong _generate_one_chunk lo nốt).
+    if not req.multi_turn and req.format == "mp3":
+        joined = await _wav_to_mp3(joined)
+    return ChunkResult(
+        audio_bytes=joined,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        engine_time_s=engine_time,
+        expected_tokens=_expected_tokens(text),
+    )
+
+
 async def _generate_one_chunk(
     request_id: str,
     chunk_index: int,
@@ -798,7 +971,7 @@ async def _generate_one_chunk(
 ) -> ChunkResult:
     async with job_semaphore:
         async with _lane_semaphore(lane):
-            result = await _call_sglang_with_retry(request_id, chunk_index, text, req, ref, context=context)
+            result = await _render_chunk(request_id, chunk_index, text, req, ref, context=context)
             # Multi-turn keeps result.audio_bytes as WAV (for the context window);
             # the chunk FILE still needs req.format. Re-encode only for the write.
             file_bytes = result.audio_bytes

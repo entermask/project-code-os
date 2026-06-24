@@ -610,3 +610,72 @@ def test_sglang_payload_sets_sampling_defaults(api):
     # client override được tôn trọng
     req2 = api.TTSRequest(chunks=["hi"], ref_audio_url="https://x/y.wav", ref_text="t", temperature=0.3)
     assert api._sglang_payload("hello", req2, ref)["temperature"] == 0.3
+
+
+def test_expected_tokens_per_script(api):
+    # Rate theo script (đo thực): Han6.0 Kana4.8 Hangul3.8 Arabic3.0 Thai2.5 Deva2.4 latin2.0
+    assert api._expected_tokens("中" * 50) == 300   # Han
+    assert api._expected_tokens("あ" * 50) == 240   # kana
+    assert api._expected_tokens("가" * 50) == 190   # hangul
+    assert api._expected_tokens("ا" * 50) == 150    # arabic
+    assert api._expected_tokens("ก" * 50) == 125    # thai
+    assert api._expected_tokens("क" * 50) == 120    # devanagari
+    assert api._expected_tokens("a" * 50) == 100    # latin/default
+    # Trung > Nhật > Hàn > Arabic > Thai > Hindi > latin cho cùng số ký tự
+    n = 60
+    order = [api._expected_tokens(c * n) for c in "中あ가اกक a".replace(" ", "")]
+    assert order == sorted(order, reverse=True)
+
+
+def test_split_for_subchunk_bounds_and_preserves_text(api):
+    target = int(api.SUBSPLIT_TARGET_RATIO * api.MAX_NEW_TOKENS_CEIL)
+    # Dày + có dấu câu → nhiều phần, mỗi phần ≤ target, KHÔNG mất chữ
+    text = "天气好。" * 120                       # ~2400 token >> cap
+    parts = api._split_for_subchunk(text, target)
+    assert len(parts) >= 2
+    assert all(api._expected_tokens(p) <= target for p in parts)
+    assert "".join(parts) == text                # text bảo toàn
+    # Câu dài KHÔNG dấu câu → vẫn bị chặn dưới cap bằng cắt cứng
+    longrun = "私" * 500
+    parts2 = api._split_for_subchunk(longrun, target)
+    assert all(api._expected_tokens(p) <= target for p in parts2)
+    assert "".join(parts2) == longrun
+
+
+@pytest.mark.asyncio
+async def test_render_chunk_passthrough_under_ceiling(api, monkeypatch):
+    from pathlib import Path as _Path
+    calls = []
+
+    async def fake_retry(request_id, chunk_index, text, req, ref, context=None, force_wav=False):
+        calls.append((text, force_wav))
+        return api.ChunkResult(audio_bytes=wav_bytes(), completion_tokens=10,
+                               expected_tokens=api._expected_tokens(text))
+
+    monkeypatch.setattr(api, "_call_sglang_with_retry", fake_retry)
+    ref = api.ReferenceCacheEntry(audio_path=_Path("/tmp/none"), transcript="t", audio_cache_hit=True)
+    req = api.TTSRequest(chunks=["x"], ref_audio_url="https://x/y.wav", ref_text="t", format="wav")
+    # Dưới trần → 1 call thẳng, KHÔNG force_wav, KHÔNG sub-split
+    await api._render_chunk("job", 0, "a" * 100, req, ref)
+    assert len(calls) == 1 and calls[0][1] is False
+
+
+@pytest.mark.asyncio
+async def test_render_chunk_subsplits_over_ceiling_and_concats(api, monkeypatch):
+    from pathlib import Path as _Path
+    calls = []
+
+    async def fake_retry(request_id, chunk_index, text, req, ref, context=None, force_wav=False):
+        calls.append((text, force_wav))
+        return api.ChunkResult(audio_bytes=wav_bytes(), completion_tokens=10,
+                               expected_tokens=api._expected_tokens(text))
+
+    monkeypatch.setattr(api, "_call_sglang_with_retry", fake_retry)
+    ref = api.ReferenceCacheEntry(audio_path=_Path("/tmp/none"), transcript="t", audio_cache_hit=True)
+    req = api.TTSRequest(chunks=["x"], ref_audio_url="https://x/y.wav", ref_text="t", format="wav")
+    # Vượt trần (dense) → nhiều sub-call force_wav=True, nối thành 1 WAV, token cộng dồn
+    res = await api._render_chunk("job", 1, "天" * 400, req, ref)   # ~2400 > 2048
+    assert len(calls) >= 2
+    assert all(fw is True for _, fw in calls)
+    assert api._is_wav(res.audio_bytes)
+    assert res.completion_tokens == 10 * len(calls)
