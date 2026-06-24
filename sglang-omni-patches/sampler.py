@@ -10,6 +10,7 @@ the same delay/EOC state machine:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -64,6 +65,17 @@ STOP_CODE = -1
 
 # CG-baked top-k upper bound = full codec vocab, so the default value is a no-op filter.
 K_MAX = 1026
+
+# Repetition-Aware Sampling (RAS), ported faithfully from Higgs
+# (modeling_higgs_audio._sample_audio_tokens) but reformulated CUDA-Graph-safe
+# (mask + torch.where + resample-all, NO torch.nonzero). A rolling window of the
+# last RAS_WIN_LEN emitted codes per (row, codebook): if the just-sampled code
+# repeats >= RAS_WIN_MAX_NUM_REPEAT times in that window, resample from the RAW
+# logits (no temp/top_k/top_p) to break the loop — exactly Higgs' behaviour.
+# RAS_WIN_LEN <= 0 disables RAS. Higgs defaults: 7 / 2.
+RAS_WIN_LEN = int(os.getenv("HIGGS_RAS_WIN_LEN", "7"))
+RAS_WIN_MAX_NUM_REPEAT = int(os.getenv("HIGGS_RAS_WIN_MAX_NUM_REPEAT", "2"))
+_RAS_WIN = max(1, RAS_WIN_LEN)
 
 
 @dataclass
@@ -120,6 +132,14 @@ class HiggsBatchedSamplerState:
             dtype=torch.long,
             device=self.device,
         )
+        # RAS rolling window: last ``_RAS_WIN`` emitted codes per (row, codebook).
+        # Init to -1 (no real code) so an empty window never counts as a repeat.
+        self.recent_codes = torch.full(
+            (self.max_batch_size, self.num_codebooks, _RAS_WIN),
+            -1,
+            dtype=torch.long,
+            device=self.device,
+        )
 
     def reset_row(self, row: int) -> None:
         """Wipe row ``row`` so the next owner can't read stale state."""
@@ -127,6 +147,7 @@ class HiggsBatchedSamplerState:
         self.eoc_countdown[row] = -1
         self.generation_done[row] = False
         self.last_codes[row].zero_()
+        self.recent_codes[row].fill_(-1)
 
     def view_row(self, row: int) -> HiggsSamplerState:
         """Materialise row ``row`` as a per-request :class:`HiggsSamplerState`.
@@ -328,6 +349,7 @@ def batched_step(
     eoc_countdown = state.eoc_countdown[row_indices]
     generation_done = state.generation_done[row_indices]
     last_codes = state.last_codes[row_indices]
+    recent_codes = state.recent_codes[row_indices]
 
     (
         out_codes,
@@ -335,12 +357,14 @@ def batched_step(
         new_eoc_countdown,
         new_generation_done,
         new_last_codes,
+        new_recent_codes,
     ) = batched_step_direct(
         logits_BNV,
         delay_count,
         eoc_countdown,
         generation_done,
         last_codes,
+        recent_codes,
         temperature=temperature,
         top_p=top_p,
         top_k_buf=top_k_buf,
@@ -352,6 +376,7 @@ def batched_step(
     state.eoc_countdown[row_indices] = new_eoc_countdown.to(state.eoc_countdown.dtype)
     state.generation_done[row_indices] = new_generation_done
     state.last_codes[row_indices] = new_last_codes
+    state.recent_codes[row_indices] = new_recent_codes
 
     return out_codes
 
@@ -362,13 +387,16 @@ def batched_step_direct(
     eoc_countdown: torch.Tensor,
     generation_done: torch.Tensor,
     last_codes: torch.Tensor,
+    recent_codes: torch.Tensor,
     *,
     temperature: torch.Tensor,
     top_p: torch.Tensor | None = None,
     top_k_buf: torch.Tensor | None = None,
     boc_id: int = BOC_ID,
     eoc_id: int = EOC_ID,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """CG-friendly state machine: state in/out as direct ``[B, ...]`` tensors,
     no ``state``/``row_indices`` indirection. Caller persists the returned
     new state. See :func:`batched_step` for arg semantics.
@@ -385,6 +413,27 @@ def batched_step_direct(
         top_p=top_p,
         top_k_buf=top_k_buf,
     )
+
+    # --- Repetition-Aware Sampling (RAS) — faithful to Higgs, CG-safe ---------
+    # Count how many times the just-sampled code appears in this (row, codebook)
+    # window. If >= RAS_WIN_MAX_NUM_REPEAT, the model is looping → resample from
+    # the RAW logits (no temp/top_k/top_p) to break it, exactly as Higgs does.
+    # Reformulated branchless (compute-for-all + torch.where) — no torch.nonzero,
+    # so it captures cleanly inside the CUDA graph. Window holds the post-RAS
+    # sampled codes (pre delay/EOC overlay), rolled left by one each step.
+    if RAS_WIN_LEN > 0:
+        rep_BN = (recent_codes == codes_BN.unsqueeze(-1)).sum(dim=-1)
+        needs_resample = rep_BN >= RAS_WIN_MAX_NUM_REPEAT
+        raw_probs = logits_BNV.float().softmax(dim=-1).reshape(B * N, V)
+        resampled_BN = raw_probs.multinomial(num_samples=1).squeeze(-1).view(B, N)
+        codes_BN = torch.where(
+            needs_resample, resampled_BN.to(codes_BN.dtype), codes_BN
+        )
+        new_recent_codes = torch.cat(
+            [recent_codes[:, :, 1:], codes_BN.unsqueeze(-1)], dim=-1
+        )
+    else:
+        new_recent_codes = recent_codes
 
     cb_idx = torch.arange(N, device=device).unsqueeze(0).expand(B, N)
     in_delay = (delay_count < N).unsqueeze(-1)
@@ -427,6 +476,7 @@ def batched_step_direct(
         new_eoc_countdown,
         new_generation_done,
         new_last_codes,
+        new_recent_codes,
     )
 
 
