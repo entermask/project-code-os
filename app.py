@@ -132,6 +132,34 @@ _RE_ARABIC = re.compile("[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\u
 _RE_THAI = re.compile("[\u0e00-\u0e7f]")
 _RE_DEVANAGARI = re.compile("[\u0900-\u097f]")
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
+# P1 speaker-boost-on-bridge: worker gửi af_filter (chuỗi -af gồm atempo+boost) → áp khi encode
+# WAV→MP3 từng chunk, trả MP3 đã boost (worker chỉ concat-copy). Giới hạn riêng + nice để KHÔNG
+# tranh CPU feed-GPU (container cgroup ~22 core).
+FFMPEG_POST_CONCURRENCY = max(1, int(os.getenv("FFMPEG_POST_CONCURRENCY", "10")))
+_FFMPEG_POST_NICE = os.getenv("FFMPEG_POST_NICE", "19").strip().lower()
+_FFMPEG_NICE_PREFIX = (
+    [] if _FFMPEG_POST_NICE in ("", "0", "off", "false", "no") else ["nice", "-n", _FFMPEG_POST_NICE]
+)
+# loudnorm (trong af) là chuẩn-hoá ĐỘNG, cần đủ độ dài để đo ổn định; trên audio NGẮN (<~3s) nó
+# under-measure → boost yếu/lệch. Chunk ngắn (vd segment SRT, câu cuối) bị nhất. Fix: CHỈ với chunk
+# ngắn, pad silence cho loudnorm đủ buffer (LUFS gating bỏ qua silence → vẫn đo đúng speech) rồi atrim
+# cắt lại đúng độ dài. Chunk dài giữ nguyên (không thêm chi phí). Tắt: SHORT_LOUDNORM_SEC=0.
+SHORT_LOUDNORM_SEC = float(os.getenv("SHORT_LOUDNORM_SEC", "3.0"))
+_ATEMPO_RE = re.compile(r"atempo=([0-9.]+)")
+_LOUDNORM_RE = re.compile(r"loudnorm=[^,]*")
+
+
+def _atempo_product(af: str) -> float:
+    """Tích các atempo trong chuỗi af (để tính độ dài sau khi tăng/giảm tốc). 1.0 nếu không có."""
+    prod = 1.0
+    for m in _ATEMPO_RE.finditer(af or ""):
+        try:
+            v = float(m.group(1))
+            if v > 0:
+                prod *= v
+        except ValueError:
+            pass
+    return prod if prod > 0 else 1.0
 
 
 def _expected_tokens(text: str) -> int:
@@ -231,6 +259,8 @@ app = FastAPI(title="SGLang TTS API", version="0.2.0")
 chunk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHUNKS)
 short_chunk_semaphore = asyncio.Semaphore(SHORT_RESERVED_CHUNKS) if SHORT_RESERVED_CHUNKS else None
 long_chunk_semaphore = asyncio.Semaphore(LONG_CONCURRENT_CHUNKS)
+# Bound riêng cho ffmpeg post-proc (boost-on-bridge) → KHÔNG tranh hết core với generation feed-GPU.
+ffmpeg_post_semaphore = asyncio.Semaphore(FFMPEG_POST_CONCURRENCY)
 cache_locks: dict[str, asyncio.Lock] = {}
 cache_locks_guard = asyncio.Lock()
 jobs: dict[str, "TTSJob"] = {}
@@ -245,6 +275,9 @@ class TTSRequest(BaseModel):
     ref_audio_url: str
     ref_text: str
     format: str = "mp3"
+    # P1 boost-on-bridge: chuỗi ffmpeg -af (atempo+boost) worker tính sẵn (single source of truth ở
+    # speaker-boost.ts). Có giá trị → áp khi encode WAV→MP3 từng chunk; None → hành vi cũ y nguyên.
+    af_filter: Optional[str] = None
     speed: Optional[float] = None
     max_new_tokens: Optional[int] = None
     temperature: Optional[float] = None
@@ -535,27 +568,61 @@ def _unwrap_sglang_audio(data: bytes) -> bytes:
     return data
 
 
-async def _wav_to_mp3(wav_bytes: bytes) -> bytes:
+def _short_loudnorm_padcut(af: str, wav_bytes: bytes) -> str:
+    """Fallback single-pass: chunk NGẮN (<SHORT_LOUDNORM_SEC) pad silence cho loudnorm đủ buffer rồi
+    atrim cắt lại. Duration FREE từ WAV header; atempo (nếu có) làm co/giãn → tính theo post-atempo."""
+    if SHORT_LOUDNORM_SEC > 0 and "loudnorm" in af:
+        d = _wav_seconds(wav_bytes)
+        atempo = _atempo_product(af)
+        post_dur = d / atempo
+        if 0 < post_dur < SHORT_LOUDNORM_SEC:
+            pad_to = SHORT_LOUDNORM_SEC * atempo
+            return f"apad=whole_dur={pad_to:.3f},{af},atrim=0:{post_dur:.3f},asetpts=N/SR/TB"
+    return af
+
+
+# (two-pass linear loudnorm — _measure_loudnorm/_apply_linear_af — đã XOÁ theo yêu cầu;
+#  loudnorm giờ chỉ single-pass + pad-cut short-clip như bản d9cabb7a.)
+
+
+async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None) -> bytes:
     if not shutil.which(FFMPEG_BIN):
         raise RuntimeError("ffmpeg is required to convert WAV output to MP3.")
 
-    process = await asyncio.create_subprocess_exec(
-        FFMPEG_BIN,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "wav",
-        "-i",
-        "pipe:0",
-        "-f",
-        "mp3",
-        "pipe:1",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await process.communicate(wav_bytes)
+    # Path KHÔNG boost: giữ nguyên perf (không nice/semaphore, không re-filter).
+    if not af:
+        process = await asyncio.create_subprocess_exec(
+            FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0", "-f", "mp3", "pipe:1",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(wav_bytes)
+        if process.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed to convert WAV to MP3: {stderr.decode('utf-8', 'replace')}")
+        return stdout
+
+    # Boost-path: nice + semaphore bao CẢ measure + encode (giữ concurrency bounded ~FFMPEG_POST_CONCURRENCY).
+    await ffmpeg_post_semaphore.acquire()
+    try:
+        # Bỏ CHỈ two-pass linear loudnorm (theo yêu cầu — "sựt" inherent ở ref audio, không phải loudnorm).
+        # GIỮ pad-cut short-clip (<3s: pad audio cho loudnorm đủ buffer rồi atrim cắt lại). = bản d9cabb7a.
+        eff_af = _short_loudnorm_padcut(af, wav_bytes)
+        # Boost-on-bridge: ÉP codec KHỚP worker FINAL_MP3 (libmp3lame 128k 44.1k stereo) → worker concat-copy.
+        args = _FFMPEG_NICE_PREFIX + [
+            FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+            "-af", eff_af, "-c:a", "libmp3lame", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-f", "mp3", "pipe:1",
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(wav_bytes)
+    finally:
+        ffmpeg_post_semaphore.release()
     if process.returncode != 0:
         raise RuntimeError(f"ffmpeg failed to convert WAV to MP3: {stderr.decode('utf-8', 'replace')}")
     return stdout
@@ -646,7 +713,7 @@ def _sglang_payload(
         "input": chunk_text,
         # Multi-turn keeps chunks as WAV internally so the rolling context window
         # can be concatenated/trimmed losslessly; output is re-encoded later.
-        "response_format": "wav" if req.multi_turn else req.format,
+        "response_format": "wav" if (req.multi_turn or req.af_filter) else req.format,
         "references": [
             {
                 "audio_path": str(ref.audio_path),
@@ -764,7 +831,9 @@ async def _call_sglang(
     )
 
     # Multi-turn (và sub-split force_wav) giữ WAV (re-encode sang req.format khi ghi file / sau khi nối).
-    if not force_wav and not req.multi_turn and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
+    # af_filter (boost-on-bridge) GIỮ WAV ở đây → boost+encode dồn về _generate_one_chunk (quality-check
+    # & grounding chạy trên WAV thô như mode wav cũ; tránh encode 2 lần).
+    if not force_wav and not req.multi_turn and not req.af_filter and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
         result.audio_bytes = await _wav_to_mp3(audio_bytes)
 
     # Audio rỗng/quá nhỏ = không có audio dùng được → hard-fail để retry (xem _generate_one_chunk).
@@ -947,7 +1016,7 @@ async def _render_chunk(
         raise RuntimeError(f"sub-split chunk {chunk_index}: nối WAV rỗng (sub-part không decode được)")
     # Trả ĐÚNG format như đường thường: single-turn mp3 → mp3 (re-encode 1 lần sau khi nối, tránh
     # artifact biên frame mp3); còn lại giữ WAV (file-write trong _generate_one_chunk lo nốt).
-    if not req.multi_turn and req.format == "mp3":
+    if not req.multi_turn and not req.af_filter and req.format == "mp3":
         joined = await _wav_to_mp3(joined)
     return ChunkResult(
         audio_bytes=joined,
@@ -975,8 +1044,11 @@ async def _generate_one_chunk(
             # Multi-turn keeps result.audio_bytes as WAV (for the context window);
             # the chunk FILE still needs req.format. Re-encode only for the write.
             file_bytes = result.audio_bytes
-            if req.multi_turn and req.format == "mp3" and _is_wav(file_bytes):
-                file_bytes = await _wav_to_mp3(file_bytes)
+            # af_filter (boost-on-bridge): audio giữ WAV tới đây (guard ở _call_sglang/_render_chunk) →
+            # mọi nhánh vào _wav_to_mp3 với af → MP3 đã boost. Không af: chỉ multi-turn còn WAV cần encode
+            # (single-turn đã mp3 ở _call_sglang) → _is_wav=False, giữ nguyên hành vi cũ.
+            if req.format == "mp3" and _is_wav(file_bytes):
+                file_bytes = await _wav_to_mp3(file_bytes, af=req.af_filter)
             # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
             tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
             try:
