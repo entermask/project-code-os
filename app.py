@@ -1,9 +1,11 @@
+import array
 import asyncio
 import base64
 import hashlib
 import io
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -145,6 +147,14 @@ _FFMPEG_NICE_PREFIX = (
 # ngắn, pad silence cho loudnorm đủ buffer (LUFS gating bỏ qua silence → vẫn đo đúng speech) rồi atrim
 # cắt lại đúng độ dài. Chunk dài giữ nguyên (không thêm chi phí). Tắt: SHORT_LOUDNORM_SEC=0.
 SHORT_LOUDNORM_SEC = float(os.getenv("SHORT_LOUDNORM_SEC", "3.0"))
+# SHARED-GAIN loudnorm: loudnorm động PER-CHUNK độc lập → mỗi mảnh một gain → bậc âm lượng giữa các
+# mảnh ("to nhỏ" quanh <break time/>: mảnh dưới-câu bị cào bằng về -16 riêng lẻ, mất nhấn nhá + nhiễu
+# đo mảnh ngắn). Fix: chunk ĐẦU TIÊN của job đo loudnorm (pass đo ~0.3s, 1 lần/job) → khoá measured_*
+# → MỌI chunk áp linear=true (CÙNG 1 gain tĩnh) → đồng nhất by construction, prosody giữ nguyên.
+# Worker có thể gửi sẵn `ln_measured` (đồng bộ gain qua NHIỀU batch/box của cùng 1 task) → bỏ qua đo.
+# Đo fail/timeout → fallback per-chunk pad-cut dynamic (đúng hành vi cũ). Tắt: LOUDNORM_SHARED=off.
+LOUDNORM_SHARED = os.getenv("LOUDNORM_SHARED", "on").strip().lower() not in ("off", "0", "false", "no")
+LN_ANCHOR_WAIT_SEC = float(os.getenv("LN_ANCHOR_WAIT_SEC", "120"))
 _ATEMPO_RE = re.compile(r"atempo=([0-9.]+)")
 _LOUDNORM_RE = re.compile(r"loudnorm=[^,]*")
 
@@ -278,6 +288,10 @@ class TTSRequest(BaseModel):
     # P1 boost-on-bridge: chuỗi ffmpeg -af (atempo+boost) worker tính sẵn (single source of truth ở
     # speaker-boost.ts). Có giá trị → áp khi encode WAV→MP3 từng chunk; None → hành vi cũ y nguyên.
     af_filter: Optional[str] = None
+    # Shared-gain loudnorm: measured values {i,tp,lra,thresh,offset} worker lấy từ batch đầu (status
+    # `ln_measured`) truyền cho batch sau → CÙNG gain tĩnh qua mọi batch/box của 1 task. None → job
+    # tự anchor trên chunk đầu (xem _shared_loudnorm_af).
+    ln_measured: Optional[dict] = None
     speed: Optional[float] = None
     max_new_tokens: Optional[int] = None
     temperature: Optional[float] = None
@@ -344,6 +358,10 @@ class TTSJob:
     completion_tokens: int = 0
     total_tokens: int = 0
     engine_time_s: float = 0.0
+    # Shared-gain loudnorm per job: future do chunk ĐẦU claim (đo anchor), các chunk khác await;
+    # ln_measured expose qua status để worker thread sang batch sau (xem _shared_loudnorm_af).
+    ln_future: Optional[asyncio.Future] = None
+    ln_measured: Optional[dict] = None
 
 
 def _ensure_dirs() -> None:
@@ -581,11 +599,198 @@ def _short_loudnorm_padcut(af: str, wav_bytes: bytes) -> str:
     return af
 
 
-# (two-pass linear loudnorm — _measure_loudnorm/_apply_linear_af — đã XOÁ theo yêu cầu;
-#  loudnorm giờ chỉ single-pass + pad-cut short-clip như bản d9cabb7a.)
+# --- Shared-gain loudnorm (KHOÁ 1 gain tĩnh cho cả job/task) + outlier rescue ---
+# Khác bản two-pass cũ (đã xoá ở d930983: đo PER-CHUNK → vẫn mỗi chunk một gain): ở đây đo ĐÚNG 1 LẦN
+# trên chunk anchor rồi mọi chunk áp CÙNG volume=dB → hết bậc "to nhỏ" giữa các mảnh <break time/> /
+# segment SRT ngắn, prosody giữ nguyên. RIÊNG chunk sinh LỆCH HẲN mức (generation lỗi — đo thực file
+# khách: mảnh -38 LUFS cạnh mảnh -14, dropout 20-25 LU) thì shared gain sẽ GIỮ NGUYÊN dropout →
+# screen RMS rẻ so với anchor, lệch > LN_OUTLIER_DB thì đo riêng + normalize riêng về target (rescue).
+LN_OUTLIER_DB = float(os.getenv("LN_OUTLIER_DB", "6"))
+# Cho phép gain vượt TP-cap tối đa chừng này dB — alimiter cuối chain bắt phần đỉnh (đúng vai trò nó
+# làm dưới loudnorm động cũ). Cap cứng theo TP anchor làm CẢ job nhỏ đi khi anchor có peak cao (đo
+# thực vbee: mean -20.4 thay vì -16). 0 = cap cứng như cũ.
+LN_TP_OVER_DB = float(os.getenv("LN_TP_OVER_DB", "6"))
 
 
-async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None) -> bytes:
+def _ln_values_valid(m: Optional[dict]) -> Optional[dict]:
+    """Validate measured values {i,tp,lra,thresh,offset}: đủ key, hữu hạn, i trong (-70, 0).
+    Giữ thêm `rms` (dBFS của anchor, optional) nếu hợp lệ — dùng cho screen outlier xuyên batch."""
+    if not isinstance(m, dict):
+        return None
+    try:
+        vals = {k: float(m[k]) for k in ("i", "tp", "lra", "thresh", "offset")}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if any(not math.isfinite(v) for v in vals.values()):
+        return None
+    if not (-70.0 < vals["i"] < 0.0):
+        return None
+    try:
+        rms = float(m["rms"])
+        if math.isfinite(rms) and -120.0 < rms < 0.0:
+            vals["rms"] = rms
+    except (KeyError, TypeError, ValueError):
+        pass
+    return vals
+
+
+def _wav_rms_dbfs(wav_bytes: bytes) -> Optional[float]:
+    """RMS dBFS của WAV 16-bit (mono/stereo) — screen outlier RẺ (thuần Python, không ffmpeg).
+    None nếu không decode được / không phải s16 / câm."""
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as r:
+            if r.getsampwidth() != 2:
+                return None
+            frames = r.readframes(r.getnframes())
+        samples = array.array("h")
+        samples.frombytes(frames[: len(frames) - (len(frames) % 2)])
+        if not samples:
+            return None
+        acc = 0
+        for s in samples:
+            acc += s * s
+        rms = math.sqrt(acc / len(samples))
+        if rms <= 0:
+            return None
+        return 20.0 * math.log10(rms / 32768.0)
+    except Exception:
+        return None
+
+
+def _apply_linear_af(af: str, m: dict) -> str:
+    """Thay loudnorm=... bằng `volume=<gain>dB` — gain TĨNH tính từ measured của ANCHOR.
+
+    KHÔNG dùng loudnorm linear=true với measured của anchor: khi CHUNK KHÁC vi phạm điều kiện nội bộ
+    (measured_TP+gain > TP hoặc LRA > target) ffmpeg LẶNG LẼ rơi về dynamic — mà seed measured lại là
+    của anchor → gain rác (đo thực: có chunk ra -49 LUFS). volume=dB thì tất định tuyệt đối cho mọi
+    chunk; peak lệch đã có alimiter cuối chain (đúng vai trò của nó trong preset el)."""
+    ln = _LOUDNORM_RE.search(af)
+    target_i, target_tp = -16.0, -1.5
+    if ln:
+        mi = re.search(r"I=(-?[0-9.]+)", ln.group(0))
+        mtp = re.search(r"TP=(-?[0-9.]+)", ln.group(0))
+        if mi:
+            target_i = float(mi.group(1))
+        if mtp:
+            target_tp = float(mtp.group(1))
+    # Gain đưa integrated về target (+ offset pass-1); cap theo true-peak nhưng NỚI LN_TP_OVER_DB
+    # (alimiter cuối chain bắt phần vượt) — cap cứng làm cả job nhỏ đi khi anchor peaky.
+    gain = target_i - m["i"] + m["offset"]
+    gain = min(gain, target_tp - m["tp"] + LN_TP_OVER_DB)
+    return _LOUDNORM_RE.sub(f"volume={gain:.2f}dB", af, count=1)
+
+
+async def _measure_loudnorm(af: str, wav_bytes: bytes) -> Optional[dict]:
+    """Pass đo: chạy chain với loudnorm:print_format=json → parse input loudness. Chunk ngắn (<3s
+    post-atempo) pad silence cho phép đo đủ block (gating bỏ silence → vẫn đo đúng speech). None nếu
+    đo lỗi / kết quả vô nghĩa (silent/clip)."""
+    measure_af = _LOUDNORM_RE.sub(lambda ln: f"{ln.group(0)}:print_format=json", af, count=1)
+    if SHORT_LOUDNORM_SEC > 0:
+        d = _wav_seconds(wav_bytes)
+        atempo = _atempo_product(af)
+        if 0 < d / atempo < SHORT_LOUDNORM_SEC:
+            measure_af = f"apad=whole_dur={SHORT_LOUDNORM_SEC * atempo:.3f},{measure_af}"
+    await ffmpeg_post_semaphore.acquire()
+    try:
+        args = _FFMPEG_NICE_PREFIX + [
+            FFMPEG_BIN, "-hide_banner", "-nostats", "-f", "wav", "-i", "pipe:0",
+            "-af", measure_af, "-f", "null", "-",
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate(wav_bytes)
+    finally:
+        ffmpeg_post_semaphore.release()
+    if process.returncode != 0:
+        return None
+    text = stderr.decode("utf-8", "replace")
+    start, end = text.rfind("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start:end + 1])
+        return _ln_values_valid({
+            "i": data.get("input_i"),
+            "tp": data.get("input_tp"),
+            "lra": data.get("input_lra"),
+            "thresh": data.get("input_thresh"),
+            "offset": data.get("target_offset"),
+        })
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+async def _shared_loudnorm_af(request_id: str, req: "TTSRequest", wav_bytes: bytes) -> Optional[str]:
+    """Trả chain -af đã khoá gain tĩnh chung cho job (linear=true), hoặc None → caller dùng đường cũ
+    (per-chunk pad-cut dynamic). Ưu tiên ln_measured worker gửi (đồng bộ qua nhiều batch/box); không có
+    thì chunk ĐẦU claim đo anchor, các chunk khác await (timeout → fallback, không kẹt job)."""
+    if not LOUDNORM_SHARED or not req.af_filter or "loudnorm" not in req.af_filter:
+        return None
+
+    # Worker gửi sẵn measured values (batch 2+ của cùng task) → áp thẳng, không cần anchor.
+    m = _ln_values_valid(req.ln_measured)
+    if m:
+        async with jobs_lock:
+            job = jobs.get(request_id)
+            if job is not None and job.ln_measured is None:
+                job.ln_measured = m
+        return await _shared_or_rescue_af(req.af_filter, m, wav_bytes)
+
+    claimed = False
+    async with jobs_lock:
+        job = jobs.get(request_id)
+        if job is None:
+            return None
+        if job.ln_future is None:
+            job.ln_future = asyncio.get_running_loop().create_future()
+            claimed = True
+        fut = job.ln_future
+
+    if claimed:
+        m = None
+        try:
+            m = await _measure_loudnorm(req.af_filter, wav_bytes)
+            if m:
+                # RMS của anchor: mốc screen outlier cho MỌI chunk (đi kèm ln_measured qua status/batch).
+                rms = await asyncio.get_running_loop().run_in_executor(None, _wav_rms_dbfs, wav_bytes)
+                if rms is not None:
+                    m["rms"] = rms
+        finally:
+            if not fut.done():
+                fut.set_result(m)
+        if m:
+            async with jobs_lock:
+                job = jobs.get(request_id)
+                if job is not None:
+                    job.ln_measured = m
+    else:
+        try:
+            m = await asyncio.wait_for(asyncio.shield(fut), timeout=LN_ANCHOR_WAIT_SEC)
+        except asyncio.TimeoutError:
+            m = None
+
+    return await _shared_or_rescue_af(req.af_filter, m, wav_bytes) if m else None
+
+
+async def _shared_or_rescue_af(af: str, m: dict, wav_bytes: bytes) -> str:
+    """Shared gain mặc định; RESCUE khi chunk sinh lệch hẳn mức so với anchor (generation lỗi —
+    dropout -38 LUFS cạnh -14 trong file khách). Screen bằng RMS thuần Python (rẻ, chain giống nhau
+    nên lệch RMS ≈ lệch loudness); vượt LN_OUTLIER_DB → đo riêng chunk + normalize riêng về target
+    (cào bằng ĐÚNG chỗ cần cào — dropout thì phải kéo về, không giữ "prosody")."""
+    if LN_OUTLIER_DB > 0 and m.get("rms") is not None:
+        rms = await asyncio.get_running_loop().run_in_executor(None, _wav_rms_dbfs, wav_bytes)
+        if rms is not None and abs(rms - m["rms"]) > LN_OUTLIER_DB:
+            own = await _measure_loudnorm(af, wav_bytes)
+            if own:
+                return _apply_linear_af(af, own)
+    return _apply_linear_af(af, m)
+
+
+async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None, af_final: bool = False) -> bytes:
     if not shutil.which(FFMPEG_BIN):
         raise RuntimeError("ffmpeg is required to convert WAV output to MP3.")
 
@@ -605,9 +810,9 @@ async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None) -> bytes:
     # Boost-path: nice + semaphore bao CẢ measure + encode (giữ concurrency bounded ~FFMPEG_POST_CONCURRENCY).
     await ffmpeg_post_semaphore.acquire()
     try:
-        # Bỏ CHỈ two-pass linear loudnorm (theo yêu cầu — "sựt" inherent ở ref audio, không phải loudnorm).
-        # GIỮ pad-cut short-clip (<3s: pad audio cho loudnorm đủ buffer rồi atrim cắt lại). = bản d9cabb7a.
-        eff_af = _short_loudnorm_padcut(af, wav_bytes)
+        # af_final: chain ĐÃ khoá gain tĩnh shared (linear=true) → dùng verbatim, KHÔNG pad-cut
+        # (linear không cần buffer đo). Ngược lại: pad-cut short-clip như bản d9cabb7a.
+        eff_af = af if af_final else _short_loudnorm_padcut(af, wav_bytes)
         # Boost-on-bridge: ÉP codec KHỚP worker FINAL_MP3 (libmp3lame 128k 44.1k stereo) → worker concat-copy.
         args = _FFMPEG_NICE_PREFIX + [
             FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
@@ -1048,7 +1253,13 @@ async def _generate_one_chunk(
             # mọi nhánh vào _wav_to_mp3 với af → MP3 đã boost. Không af: chỉ multi-turn còn WAV cần encode
             # (single-turn đã mp3 ở _call_sglang) → _is_wav=False, giữ nguyên hành vi cũ.
             if req.format == "mp3" and _is_wav(file_bytes):
-                file_bytes = await _wav_to_mp3(file_bytes, af=req.af_filter)
+                # Shared-gain loudnorm: khoá 1 gain tĩnh cho cả job (hết bậc "to nhỏ" giữa chunk);
+                # None (tắt/đo fail/timeout) → đường cũ per-chunk pad-cut dynamic y nguyên.
+                shared_af = await _shared_loudnorm_af(request_id, req, file_bytes) if req.af_filter else None
+                if shared_af:
+                    file_bytes = await _wav_to_mp3(file_bytes, af=shared_af, af_final=True)
+                else:
+                    file_bytes = await _wav_to_mp3(file_bytes, af=req.af_filter)
             # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
             tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
             try:
@@ -1239,6 +1450,10 @@ def _job_payload(job: TTSJob) -> dict[str, Any]:
     }
     if job.detail:
         payload["detail"] = job.detail
+    # Shared-gain loudnorm: worker đọc từ batch đầu → truyền `ln_measured` cho batch sau của cùng task
+    # (cùng 1 gain tĩnh qua mọi batch/box).
+    if job.ln_measured is not None:
+        payload["ln_measured"] = job.ln_measured
     if job.audio_cache_hit is not None:
         payload["cache_hit"] = job.audio_cache_hit
     if job.prompt_tokens or job.completion_tokens or job.engine_time_s:

@@ -679,3 +679,200 @@ async def test_render_chunk_subsplits_over_ceiling_and_concats(api, monkeypatch)
     assert all(fw is True for _, fw in calls)
     assert api._is_wav(res.audio_bytes)
     assert res.completion_tokens == 10 * len(calls)
+
+
+# --- Shared-gain loudnorm (khoá 1 gain tĩnh cho cả job — fix "to nhỏ" quanh <break>/segment ngắn) ---
+
+LN_AF = (
+    "aresample=44100,acompressor=threshold=-18dB:ratio=3,"
+    "loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=level_in=1:level_out=1:limit=0.95"
+)
+LN_M = {"i": -30.5, "tp": -12.0, "lra": 4.0, "thresh": -41.0, "offset": -0.1}
+
+
+def _ln_job(api, request_id: str):
+    job = api.TTSJob(
+        request_id=request_id, status="processing", created_at=0.0, updated_at=0.0,
+        format="mp3", chunks_total=2,
+    )
+    api.jobs[request_id] = job
+    return job
+
+
+def test_ln_values_valid(api):
+    assert api._ln_values_valid(dict(LN_M)) == {k: float(v) for k, v in LN_M.items()}
+    assert api._ln_values_valid(None) is None
+    assert api._ln_values_valid({**LN_M, "i": -80}) is None  # ≤ gate -70 = câm
+    assert api._ln_values_valid({**LN_M, "i": 0.5}) is None  # i ≥ 0 bất thường
+    assert api._ln_values_valid({k: v for k, v in LN_M.items() if k != "tp"}) is None
+    assert api._ln_values_valid({**LN_M, "lra": float("inf")}) is None
+
+
+def test_apply_linear_af_thay_loudnorm_bang_volume_gain_tinh(api):
+    out = api._apply_linear_af(LN_AF, LN_M)
+    # gain = I(-16) - i(-30.5) + offset(-0.1) = 14.4; cap TP NỚI: -1.5-(-12)+6 = 16.5 → không cắt.
+    assert "volume=14.40dB" in out
+    assert "loudnorm" not in out  # KHÔNG còn loudnorm ở bước áp → hết fallback dynamic ngầm với seed anchor
+    assert out.startswith("aresample=44100,")
+    assert out.endswith("alimiter=level_in=1:level_out=1:limit=0.95")
+
+
+def test_apply_linear_af_cap_tp_co_noi_lo(api):
+    # anchor peaky (tp=-2): ideal = -16-(-25)+0 = 9; cap NỚI = -1.5-(-2)+6 = 6.5 → cắt còn 6.50dB
+    # (cap cứng cũ 0.5dB làm CẢ job nhỏ đi; nới LN_TP_OVER_DB=6 để alimiter lo phần đỉnh).
+    m = {"i": -25.0, "tp": -2.0, "lra": 4.0, "thresh": -35.0, "offset": 0.0}
+    out = api._apply_linear_af(LN_AF, m)
+    assert "volume=6.50dB" in out
+
+
+@pytest.mark.asyncio
+async def test_shared_loudnorm_anchor_do_1_lan_roi_chia_se(api, monkeypatch):
+    calls = []
+
+    async def fake_measure(af, wav):
+        calls.append(af)
+        return dict(LN_M)
+
+    monkeypatch.setattr(api, "_measure_loudnorm", fake_measure)
+    job = _ln_job(api, "job-ln-anchor")
+    req = api.TTSRequest(chunks=["a", "b"], ref_audio_url="u", ref_text="t", af_filter=LN_AF)
+    af1 = await api._shared_loudnorm_af("job-ln-anchor", req, wav_bytes())
+    af2 = await api._shared_loudnorm_af("job-ln-anchor", req, wav_bytes())
+    assert af1 == af2 and af1 is not None and "volume=14.40dB" in af1
+    assert len(calls) == 1  # đo đúng 1 lần; chunk sau dùng chung gain
+    assert job.ln_measured == {k: float(v) for k, v in LN_M.items()}
+    api.jobs.pop("job-ln-anchor", None)
+
+
+@pytest.mark.asyncio
+async def test_shared_loudnorm_worker_gui_ln_measured_khong_do_lai(api, monkeypatch):
+    async def boom(af, wav):
+        raise AssertionError("không được đo khi worker đã gửi ln_measured")
+
+    monkeypatch.setattr(api, "_measure_loudnorm", boom)
+    job = _ln_job(api, "job-ln-worker")
+    req = api.TTSRequest(
+        chunks=["a"], ref_audio_url="u", ref_text="t", af_filter=LN_AF, ln_measured=dict(LN_M),
+    )
+    af = await api._shared_loudnorm_af("job-ln-worker", req, wav_bytes())
+    assert af is not None and "volume=14.40dB" in af and "loudnorm" not in af
+    assert job.ln_measured == {k: float(v) for k, v in LN_M.items()}
+    api.jobs.pop("job-ln-worker", None)
+
+
+@pytest.mark.asyncio
+async def test_shared_loudnorm_do_fail_thi_fallback(api, monkeypatch):
+    async def fail_measure(af, wav):
+        return None
+
+    monkeypatch.setattr(api, "_measure_loudnorm", fail_measure)
+    job = _ln_job(api, "job-ln-fail")
+    req = api.TTSRequest(chunks=["a"], ref_audio_url="u", ref_text="t", af_filter=LN_AF)
+    assert await api._shared_loudnorm_af("job-ln-fail", req, wav_bytes()) is None
+    assert await api._shared_loudnorm_af("job-ln-fail", req, wav_bytes()) is None
+    assert job.ln_measured is None
+    api.jobs.pop("job-ln-fail", None)
+
+
+@pytest.mark.asyncio
+async def test_shared_loudnorm_tat_qua_env(api, monkeypatch):
+    monkeypatch.setattr(api, "LOUDNORM_SHARED", False)
+    req = api.TTSRequest(chunks=["a"], ref_audio_url="u", ref_text="t", af_filter=LN_AF)
+    assert await api._shared_loudnorm_af("job-x", req, wav_bytes()) is None
+
+
+@pytest.mark.asyncio
+async def test_e2e_af_filter_status_co_ln_measured(client, api, monkeypatch):
+    # Tone thật (không câm) → anchor đo được → status expose ln_measured cho worker thread batch sau.
+    async def tone_call_sglang(chunk_text, req, ref, seed_override=None, **_kwargs):
+        return api.ChunkResult(
+            audio_bytes=tone_wav_bytes(), prompt_tokens=1, completion_tokens=1, engine_time_s=0.1,
+        )
+
+    monkeypatch.setattr(api, "_call_sglang", tone_call_sglang)
+    response = await client.post(
+        "/v1/tts",
+        headers=auth_headers(),
+        json={
+            "chunks": ["hello one", "hello two"],
+            "ref_audio_url": "https://example.com/ref.wav",
+            "ref_text": "reference transcript",
+            "format": "mp3",
+            "af_filter": LN_AF,
+        },
+    )
+    assert response.status_code == 202
+    payload = response.json()
+
+    body = None
+    for _ in range(200):
+        status = await client.get(payload["status_url"], headers=auth_headers())
+        body = status.json()
+        if body["status"] in ("succeeded", "failed"):
+            break
+        await asyncio.sleep(0.05)
+    assert body is not None and body["status"] == "succeeded"
+    assert "ln_measured" in body
+    assert -70 < float(body["ln_measured"]["i"]) < 0
+
+    audio = await client.get(body["audio_url"], headers=auth_headers())
+    assert audio.status_code == 200
+    chunks = parse_framed_audio(audio.content)
+    assert len(chunks) == 2
+
+
+def quiet_tone_wav_bytes() -> bytes:
+    """Như tone_wav_bytes nhưng biên độ nhỏ hơn ~40dB — giả lập generation lỗi (dropout)."""
+    buf = BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        sample = struct.pack("<h", 300) + struct.pack("<h", -300)
+        wav.writeframes(sample * 8000)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_shared_loudnorm_outlier_rescue(api, monkeypatch):
+    # Anchor = tone to; chunk 2 = tone nhỏ hơn ~40dB (dropout) → screen RMS lệch > LN_OUTLIER_DB
+    # → đo RIÊNG + normalize riêng về target thay vì giữ nguyên dropout với shared gain.
+    calls = []
+
+    async def fake_measure(af, wav):
+        calls.append(len(wav))
+        if len(calls) == 1:
+            return dict(LN_M)  # anchor
+        return {"i": -45.0, "tp": -25.0, "lra": 3.0, "thresh": -55.0, "offset": 0.0}  # dropout đo riêng
+
+    monkeypatch.setattr(api, "_measure_loudnorm", fake_measure)
+    job = _ln_job(api, "job-ln-rescue")
+    req = api.TTSRequest(chunks=["a", "b"], ref_audio_url="u", ref_text="t", af_filter=LN_AF)
+
+    af1 = await api._shared_loudnorm_af("job-ln-rescue", req, tone_wav_bytes())
+    assert af1 is not None and "volume=14.40dB" in af1  # anchor: shared gain
+    assert job.ln_measured is not None and "rms" in job.ln_measured  # rms đi kèm để screen xuyên batch
+
+    af2 = await api._shared_loudnorm_af("job-ln-rescue", req, quiet_tone_wav_bytes())
+    # rescue: gain riêng từ own i=-45 → -16-(-45)+0 = 29; cap nới 23.5+6=29.5 → không cắt.
+    assert af2 is not None and "volume=29.00dB" in af2
+    assert len(calls) == 2  # anchor 1 lần + rescue 1 lần; chunk bình thường không đo thêm
+    api.jobs.pop("job-ln-rescue", None)
+
+
+@pytest.mark.asyncio
+async def test_shared_loudnorm_chunk_binh_thuong_khong_rescue(api, monkeypatch):
+    calls = []
+
+    async def fake_measure(af, wav):
+        calls.append(1)
+        return dict(LN_M)
+
+    monkeypatch.setattr(api, "_measure_loudnorm", fake_measure)
+    _ln_job(api, "job-ln-norescue")
+    req = api.TTSRequest(chunks=["a", "b"], ref_audio_url="u", ref_text="t", af_filter=LN_AF)
+    af1 = await api._shared_loudnorm_af("job-ln-norescue", req, tone_wav_bytes())
+    af2 = await api._shared_loudnorm_af("job-ln-norescue", req, tone_wav_bytes())
+    assert af1 == af2 and "volume=14.40dB" in af1  # cùng mức → cùng shared gain
+    assert len(calls) == 1  # không đo thêm cho chunk bình thường
+    api.jobs.pop("job-ln-norescue", None)
