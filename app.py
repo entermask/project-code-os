@@ -440,6 +440,18 @@ def _validate_token(authorization: Optional[str] = Header(default=None)) -> None
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _looks_degenerate_ref_text(text: str) -> bool:
+    """ref_text bị STT hallucinate: 1 ký tự lặp hàng trăm lần ('。'×387 đo thực 2026-07-03).
+    Run >= 20 cùng 1 ký tự không bao giờ là transcript thật của ref audio <=10s. ref_text rác
+    làm generation kẹt 0-progress chiếm GPU ~10' mỗi attempt → chặn ngay từ cửa (400 fail-fast)."""
+    run = 1
+    for prev, cur in zip(text, text[1:]):
+        run = run + 1 if prev == cur else 1
+        if run >= 20:
+            return True
+    return False
+
+
 def _validate_request(req: TTSRequest) -> None:
     req.format = req.format.lower().strip()
     if req.format not in SUPPORTED_FORMATS:
@@ -457,6 +469,11 @@ def _validate_request(req: TTSRequest) -> None:
     req.ref_text = req.ref_text.strip()
     if not req.ref_text:
         raise HTTPException(status_code=400, detail="ref_text is required.")
+    if _looks_degenerate_ref_text(req.ref_text):
+        raise HTTPException(
+            status_code=400,
+            detail="ref_text looks degenerate (repeated-character spam from STT); refusing job.",
+        )
 
     if req.speed is not None and req.speed <= 0:
         raise HTTPException(status_code=400, detail="speed must be greater than 0.")
@@ -1260,6 +1277,21 @@ async def _generate_one_chunk(
                     file_bytes = await _wav_to_mp3(file_bytes, af=shared_af, af_final=True)
                 else:
                     file_bytes = await _wav_to_mp3(file_bytes, af=req.af_filter)
+            # KHÔNG BAO GIỜ ghi bytes sai format ra file chunk: payload sgl-omni không unwrap được
+            # (không phải WAV/MP3) mà ghi verbatim thành .mp3 thì /audio sẽ phát tán file rác về
+            # worker → ffmpeg worker probe nhầm (raw-VVC) → merge chết. Hard-fail để retry/job fail
+            # rõ ràng tại nguồn.
+            if req.format == "mp3":
+                if not _is_mp3(file_bytes):
+                    raise RuntimeError(
+                        f"chunk {chunk_index}: refusing to write non-MP3 bytes as .mp3 "
+                        f"(head={file_bytes[:8].hex()})"
+                    )
+            elif not _is_wav(file_bytes):
+                raise RuntimeError(
+                    f"chunk {chunk_index}: refusing to write non-WAV bytes as .wav "
+                    f"(head={file_bytes[:8].hex()})"
+                )
             # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
             tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
             try:
