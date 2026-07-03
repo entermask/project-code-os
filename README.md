@@ -84,6 +84,50 @@ downloads, not TTS text chunking. `4194304` is 4 MiB, which is a good default on
 the current 110 GB RAM GPUHub hosts: lower syscall overhead than 1 MiB without
 large per-download buffers.
 
+## Service Management & Recovery
+
+On GPUHub hosts both processes run under a per-deployment supervisord
+(`supervisorctl -c /root/autodl-tmp/supervisor/supervisord.conf`) managing
+`higgs_sglang` (port 8000) and `higgs_api` (port 6006). Three layers keep them up:
+
+1. **supervisord** (`autostart`/`autorestart`) restarts a program that crashes
+   while supervisord itself is alive.
+2. **Keepalive watchdog** (`/root/autodl-tmp/bin/higgs-keepalive.sh`, an `flock`
+   singleton daemon) relaunches supervisord within ~20s if supervisord *itself*
+   dies — the failure a power blip causes when the container survives but the
+   processes do not. Started at boot and by `higgs-up.sh`.
+3. **Boot auto-start**: GPUHub runs `/etc/autodl.sh` at container boot (via
+   `/init/bin/customer.cmd.sh`), which calls `/root/autodl-tmp/bin/higgs-up.sh`
+   → supervisord + watchdog. Set the same command (`bash
+   /root/autodl-tmp/bin/higgs-up.sh`) as the instance **startup command** in the
+   GPUHub console as belt-and-suspenders (the platform regenerates
+   `/etc/autodl.sh` from it at boot).
+
+### When do I need to act?
+
+| Situation | Auto-recovers? | Action |
+|---|---|---|
+| A program crashes, supervisord alive | yes (supervisord) | none |
+| supervisord/processes die, container alive | yes (watchdog, ~20s) | none |
+| Container reboot | yes (`/etc/autodl.sh` at boot) | none — verify startup command is set |
+| sglang stuck / CUDA OOM / crash-loop / orphaned GPU workers | **no** | run `higgs-restart.sh` |
+
+### Manual restart (catch-all)
+
+```bash
+bash /root/autodl-tmp/bin/higgs-restart.sh
+```
+
+Source: `deploy/higgs-restart.sh`. It (1) stops the programs + supervisord +
+watchdog, (2) **frees the GPU** by killing every sglang-omni venv process —
+including orphaned `multiprocessing-fork` workers that survive a normal `pkill`
+and keep holding GPU memory, the usual cause of a CUDA-OOM crash-loop — (3)
+restarts supervisord + watchdog, and (4) waits for `sglang_ready`. Safe to re-run.
+
+Host helper scripts in `/root/autodl-tmp/bin/`: `higgs-up.sh` (start supervisord
++ watchdog, no GPU cleanup), `higgs-keepalive.sh` (the watchdog),
+`higgs-restart.sh` (full restart with GPU cleanup).
+
 ## Backend
 
 `scripts/run_sglang.sh` defaults to Higgs Audio v3:
