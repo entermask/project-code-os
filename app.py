@@ -13,6 +13,7 @@ import shutil
 import time
 import uuid
 import wave
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -269,6 +270,10 @@ app = FastAPI(title="SGLang TTS API", version="0.2.0")
 chunk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHUNKS)
 short_chunk_semaphore = asyncio.Semaphore(SHORT_RESERVED_CHUNKS) if SHORT_RESERVED_CHUNKS else None
 long_chunk_semaphore = asyncio.Semaphore(LONG_CONCURRENT_CHUNKS)
+# Gauge quan sát lane (expose qua /health): bao nhiêu chunk đang GIỮ slot / đang CHỜ slot mỗi lane.
+# RCA 2026-07-10: /health cũ mù lane (outstanding gộp) → không thấy lane short nghẹt dù cụm "rảnh".
+lane_inflight: dict[str, int] = {"short": 0, "long": 0, "default": 0}
+lane_waiting: dict[str, int] = {"short": 0, "long": 0, "default": 0}
 # Bound riêng cho ffmpeg post-proc (boost-on-bridge) → KHÔNG tranh hết core với generation feed-GPU.
 ffmpeg_post_semaphore = asyncio.Semaphore(FFMPEG_POST_CONCURRENCY)
 cache_locks: dict[str, asyncio.Lock] = {}
@@ -362,6 +367,9 @@ class TTSJob:
     # ln_measured expose qua status để worker thread sang batch sau (xem _shared_loudnorm_af).
     ln_future: Optional[asyncio.Future] = None
     ln_measured: Optional[dict] = None
+    # Thời điểm chunk ĐẦU TIÊN acquire được lane slot (job thật sự chạy). None = còn xếp hàng.
+    # Expose qua _job_payload để worker watchdog phân biệt "queued" vs "running không tiến".
+    started_at: Optional[float] = None
 
 
 def _ensure_dirs() -> None:
@@ -386,6 +394,63 @@ def _lane_semaphore(lane: str) -> asyncio.Semaphore:
     if lane == "long" and SHORT_RESERVED_CHUNKS:
         return long_chunk_semaphore
     return chunk_semaphore
+
+
+async def _acquire_lane_slot(lane: str) -> asyncio.Semaphore:
+    """Acquire 1 lane slot, trả về semaphore ĐÃ acquire (caller phải release đúng cái đó).
+
+    Lane "short" được ƯU TIÊN SHORT_RESERVED_CHUNKS slot dành riêng nhưng KHÔNG bị nhốt ở đó:
+    hết slot riêng mà pool long còn rảnh thì MƯỢN slot long (RCA 2026-07-10: hard-partition
+    4 slot làm job short chờ >120s trong khi 92 slot long rảnh → worker watchdog tưởng bridge
+    treo, failover xoay vòng cả cụm). Chiều ngược lại giữ nguyên: long KHÔNG mượn slot short
+    (đó mới là ý nghĩa "reserved" — chống long-stampede đè latency short).
+    Check `locked()` rồi acquire ngay là an toàn trong asyncio single-thread: giữa check và
+    fast-path decrement của acquire() không có await point nên không ai chen được.
+    """
+    if lane == "short" and short_chunk_semaphore is not None:
+        if not short_chunk_semaphore.locked():
+            await short_chunk_semaphore.acquire()
+            return short_chunk_semaphore
+        if not long_chunk_semaphore.locked():
+            await long_chunk_semaphore.acquire()
+            return long_chunk_semaphore
+        await short_chunk_semaphore.acquire()
+        return short_chunk_semaphore
+    sem = _lane_semaphore(lane)
+    await sem.acquire()
+    return sem
+
+
+@asynccontextmanager
+async def _lane_slot(lane: str):
+    """Context manager giữ 1 lane slot + cập nhật gauge lane_waiting/lane_inflight cho /health."""
+    lane_waiting[lane] = lane_waiting.get(lane, 0) + 1
+    try:
+        sem = await _acquire_lane_slot(lane)
+    finally:
+        lane_waiting[lane] = max(0, lane_waiting.get(lane, 0) - 1)
+    lane_inflight[lane] = lane_inflight.get(lane, 0) + 1
+    try:
+        yield
+    finally:
+        lane_inflight[lane] = max(0, lane_inflight.get(lane, 0) - 1)
+        sem.release()
+
+
+async def _mark_job_started(request_id: str) -> None:
+    """Chunk ĐẦU TIÊN của job acquire được lane slot → job thật sự bắt đầu chạy.
+
+    Trước đó status giữ nguyên "queued" (đang xếp hàng lane / chuẩn bị reference) để worker
+    watchdog phân biệt được "chờ đến lượt" (nới grace, đừng failover) với "đang chạy mà không
+    tiến" (bridge treo thật → failover). RCA 2026-07-10: bản cũ set "running" ngay khi
+    background task khởi động làm job xếp hàng hiện ra y hệt job treo.
+    """
+    async with jobs_lock:
+        job = jobs.get(request_id)
+        if job is not None and job.status == "queued":
+            job.status = "running"
+            job.started_at = time.time()
+            job.updated_at = job.started_at
 
 
 def _sha256(value: str) -> str:
@@ -1261,46 +1326,50 @@ async def _generate_one_chunk(
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> ChunkResult:
     async with job_semaphore:
-        async with _lane_semaphore(lane):
+        # Lane slot CHỈ bọc phần generation (SGLang chiếm GPU). Hậu kỳ bên dưới là CPU/ffmpeg
+        # đã có ffmpeg_post_semaphore riêng — bản cũ giữ lane slot qua cả anchor-wait loudnorm
+        # (tới 120s ngồi không) + encode làm lane short 4-slot nghẹt oan (RCA 2026-07-10).
+        async with _lane_slot(lane):
+            await _mark_job_started(request_id)
             result = await _render_chunk(request_id, chunk_index, text, req, ref, context=context)
-            # Multi-turn keeps result.audio_bytes as WAV (for the context window);
-            # the chunk FILE still needs req.format. Re-encode only for the write.
-            file_bytes = result.audio_bytes
-            # af_filter (boost-on-bridge): audio giữ WAV tới đây (guard ở _call_sglang/_render_chunk) →
-            # mọi nhánh vào _wav_to_mp3 với af → MP3 đã boost. Không af: chỉ multi-turn còn WAV cần encode
-            # (single-turn đã mp3 ở _call_sglang) → _is_wav=False, giữ nguyên hành vi cũ.
-            if req.format == "mp3" and _is_wav(file_bytes):
-                # Shared-gain loudnorm: khoá 1 gain tĩnh cho cả job (hết bậc "to nhỏ" giữa chunk);
-                # None (tắt/đo fail/timeout) → đường cũ per-chunk pad-cut dynamic y nguyên.
-                shared_af = await _shared_loudnorm_af(request_id, req, file_bytes) if req.af_filter else None
-                if shared_af:
-                    file_bytes = await _wav_to_mp3(file_bytes, af=shared_af, af_final=True)
-                else:
-                    file_bytes = await _wav_to_mp3(file_bytes, af=req.af_filter)
-            # KHÔNG BAO GIỜ ghi bytes sai format ra file chunk: payload sgl-omni không unwrap được
-            # (không phải WAV/MP3) mà ghi verbatim thành .mp3 thì /audio sẽ phát tán file rác về
-            # worker → ffmpeg worker probe nhầm (raw-VVC) → merge chết. Hard-fail để retry/job fail
-            # rõ ràng tại nguồn.
-            if req.format == "mp3":
-                if not _is_mp3(file_bytes):
-                    raise RuntimeError(
-                        f"chunk {chunk_index}: refusing to write non-MP3 bytes as .mp3 "
-                        f"(head={file_bytes[:8].hex()})"
-                    )
-            elif not _is_wav(file_bytes):
+        # Multi-turn keeps result.audio_bytes as WAV (for the context window);
+        # the chunk FILE still needs req.format. Re-encode only for the write.
+        file_bytes = result.audio_bytes
+        # af_filter (boost-on-bridge): audio giữ WAV tới đây (guard ở _call_sglang/_render_chunk) →
+        # mọi nhánh vào _wav_to_mp3 với af → MP3 đã boost. Không af: chỉ multi-turn còn WAV cần encode
+        # (single-turn đã mp3 ở _call_sglang) → _is_wav=False, giữ nguyên hành vi cũ.
+        if req.format == "mp3" and _is_wav(file_bytes):
+            # Shared-gain loudnorm: khoá 1 gain tĩnh cho cả job (hết bậc "to nhỏ" giữa chunk);
+            # None (tắt/đo fail/timeout) → đường cũ per-chunk pad-cut dynamic y nguyên.
+            shared_af = await _shared_loudnorm_af(request_id, req, file_bytes) if req.af_filter else None
+            if shared_af:
+                file_bytes = await _wav_to_mp3(file_bytes, af=shared_af, af_final=True)
+            else:
+                file_bytes = await _wav_to_mp3(file_bytes, af=req.af_filter)
+        # KHÔNG BAO GIỜ ghi bytes sai format ra file chunk: payload sgl-omni không unwrap được
+        # (không phải WAV/MP3) mà ghi verbatim thành .mp3 thì /audio sẽ phát tán file rác về
+        # worker → ffmpeg worker probe nhầm (raw-VVC) → merge chết. Hard-fail để retry/job fail
+        # rõ ràng tại nguồn.
+        if req.format == "mp3":
+            if not _is_mp3(file_bytes):
                 raise RuntimeError(
-                    f"chunk {chunk_index}: refusing to write non-WAV bytes as .wav "
+                    f"chunk {chunk_index}: refusing to write non-MP3 bytes as .mp3 "
                     f"(head={file_bytes[:8].hex()})"
                 )
-            # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
-            tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-            try:
-                tmp_path.write_bytes(file_bytes)
-                os.replace(tmp_path, output_path)
-            except BaseException:
-                if tmp_path.exists():
-                    tmp_path.unlink()
-                raise
+        elif not _is_wav(file_bytes):
+            raise RuntimeError(
+                f"chunk {chunk_index}: refusing to write non-WAV bytes as .wav "
+                f"(head={file_bytes[:8].hex()})"
+            )
+        # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
+        tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp_path.write_bytes(file_bytes)
+            os.replace(tmp_path, output_path)
+        except BaseException:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise
 
     await _release_chunks(1)
     async with jobs_lock:
@@ -1329,7 +1398,8 @@ async def _render_anchor(
     tag lật giọng. Trả WAV bytes (multi_turn giữ WAV); KHÔNG ghi file chunk. Có retry
     chống runaway/silent như chunk thường (chunk_index=-1 chỉ để log)."""
     async with job_semaphore:
-        async with _lane_semaphore(lane):
+        async with _lane_slot(lane):
+            await _mark_job_started(request_id)
             result = await _call_sglang_with_retry(request_id, -1, text, req, ref, context=None)
     return result.audio_bytes
 
@@ -1337,11 +1407,9 @@ async def _render_anchor(
 async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
     completed_outputs = 0
     try:
-        async with jobs_lock:
-            job = jobs.get(request_id)
-            if job is not None:
-                job.status = "running"
-                job.updated_at = time.time()
+        # Status giữ nguyên "queued" cho tới khi chunk đầu acquire được lane slot
+        # (_mark_job_started trong _generate_one_chunk/_render_anchor). Chuẩn bị reference
+        # + xếp hàng lane đều tính là "queued" → worker watchdog không nhầm với treo.
 
         ref = await _prepare_reference(req)
         job_dir = JOB_DIR / request_id
@@ -1486,6 +1554,9 @@ def _job_payload(job: TTSJob) -> dict[str, Any]:
     # (cùng 1 gain tĩnh qua mọi batch/box).
     if job.ln_measured is not None:
         payload["ln_measured"] = job.ln_measured
+    # Worker watchdog dùng cặp (status, started_at) để phân biệt "xếp hàng" vs "chạy không tiến".
+    if job.started_at is not None:
+        payload["started_at"] = job.started_at
     if job.audio_cache_hit is not None:
         payload["cache_hit"] = job.audio_cache_hit
     if job.prompt_tokens or job.completion_tokens or job.engine_time_s:
@@ -1641,6 +1712,8 @@ async def health() -> dict[str, Any]:
         "max_in_flight_chunks_per_job": MAX_IN_FLIGHT_CHUNKS_PER_JOB,
         "busy_backlog_chunks": BUSY_BACKLOG_CHUNKS,
         "outstanding_chunks": current_outstanding,
+        "lane_inflight": dict(lane_inflight),
+        "lane_waiting": dict(lane_waiting),
         "job_ttl_seconds": JOB_TTL_SECONDS,
         "streamed_job_ttl_seconds": STREAMED_JOB_TTL_SECONDS,
     }
