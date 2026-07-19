@@ -1,0 +1,250 @@
+{
+  "candidate": "d4b0acc",
+  "purpose": "verify MAX_BURST_ACTIVE_JOBS=2 without config changes",
+  "cases": [
+    {
+      "case": "fairness-2jobs",
+      "concurrent_jobs": 2,
+      "jobs": [
+        {
+          "job": "job-1",
+          "request_id": "f410a813-8600-43ee-b158-905a994f1514",
+          "status": "succeeded",
+          "in_flight_limit": 20,
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "failed": 0,
+          "degraded": 0,
+          "job_makespan_s": 3.5689594745635986,
+          "started_at": 1784475819.5569015,
+          "updated_at": 1784475823.125861,
+          "runner_wall_s": 3.671721935272217,
+          "audio_s": 129.52000000000004,
+          "completion_tokens": 3721,
+          "engine_time_s": 59.465288
+        },
+        {
+          "job": "job-2",
+          "request_id": "740955e9-df6c-4f69-9e7f-0ae2aaeec3b2",
+          "status": "succeeded",
+          "in_flight_limit": 20,
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "failed": 0,
+          "degraded": 0,
+          "job_makespan_s": 3.560187578201294,
+          "started_at": 1784475819.5719461,
+          "updated_at": 1784475823.1321337,
+          "runner_wall_s": 3.669275999069214,
+          "audio_s": 129.64,
+          "completion_tokens": 3724,
+          "engine_time_s": 58.418991
+        }
+      ],
+      "limits": [
+        20,
+        20
+      ],
+      "aggregate": {
+        "job_window_s": 3.5752322673797607,
+        "runner_window_s": 3.6717522144317627,
+        "harness_wall_s": 3.727043628692627,
+        "chunks": 138,
+        "chunks_per_s": 38.598890835458455,
+        "audio_s": 259.16,
+        "audio_s_per_s": 72.48759818056097,
+        "individual_makespan_median_s": 3.5645735263824463,
+        "individual_makespan_max_s": 3.5689594745635986,
+        "failed": 0,
+        "degraded": 0
+      },
+      "wav_validation": {
+        "files": 138,
+        "invalid": 0,
+        "pcm16_24k_mono": true
+      },
+      "resource_summary": {
+        "samples": 19,
+        "api_rss_kb": {
+          "min": 62748.0,
+          "median": 63136.0,
+          "p95": 68304.0,
+          "max": 68988.0
+        },
+        "gpu_memory_mib": {
+          "min": 83591.0,
+          "median": 83591.0,
+          "p95": 83591.0,
+          "max": 83591.0
+        },
+        "gpu_util_pct": {
+          "min": 0.0,
+          "median": 64.0,
+          "p95": 94.0,
+          "max": 94.0
+        },
+        "gpu_memory_util_pct": {
+          "min": 0.0,
+          "median": 37.0,
+          "p95": 60.199999999999996,
+          "max": 62.0
+        },
+        "power_w": {
+          "min": 82.65,
+          "median": 240.79,
+          "p95": 272.45799999999997,
+          "max": 273.16
+        }
+      },
+      "errors": {
+        "api_matches": 0,
+        "sglang_matches": 0,
+        "oom_matches": 0
+      },
+      "paths": {
+        "root": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-2jobs",
+        "resource_metrics": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-2jobs/resource-metrics.csv",
+        "api_log_window": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-2jobs/api-log-window.log",
+        "sglang_log_window": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-2jobs/sglang-log-window.log"
+      }
+    },
+    {
+      "case": "fairness-3jobs",
+      "concurrent_jobs": 3,
+      "jobs": [
+        {
+          "job": "job-1",
+          "request_id": "c6be332d-c82b-4969-b7c6-22b8a6937b8a",
+          "status": "succeeded",
+          "in_flight_limit": 20,
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "failed": 0,
+          "degraded": 0,
+          "job_makespan_s": 4.05486273765564,
+          "started_at": 1784475844.8498585,
+          "updated_at": 1784475848.9047213,
+          "runner_wall_s": 4.166698694229126,
+          "audio_s": 130.04000000000002,
+          "completion_tokens": 3734,
+          "engine_time_s": 66.606581
+        },
+        {
+          "job": "job-2",
+          "request_id": "e1b5989d-84b7-41fd-8dd0-a96ad2d552eb",
+          "status": "succeeded",
+          "in_flight_limit": 10,
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "failed": 0,
+          "degraded": 0,
+          "job_makespan_s": 6.436627626419067,
+          "started_at": 1784475844.8595147,
+          "updated_at": 1784475851.2961423,
+          "runner_wall_s": 6.524847030639648,
+          "audio_s": 128.44000000000003,
+          "completion_tokens": 3694,
+          "engine_time_s": 56.441805
+        },
+        {
+          "job": "job-3",
+          "request_id": "ed13cf62-6109-460d-84f5-bbdf53b66bfc",
+          "status": "succeeded",
+          "in_flight_limit": 20,
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "failed": 0,
+          "degraded": 0,
+          "job_makespan_s": 4.091191053390503,
+          "started_at": 1784475844.838321,
+          "updated_at": 1784475848.929512,
+          "runner_wall_s": 4.1726744174957275,
+          "audio_s": 129.88000000000002,
+          "completion_tokens": 3730,
+          "engine_time_s": 67.428007
+        }
+      ],
+      "limits": [
+        20,
+        10,
+        20
+      ],
+      "aggregate": {
+        "job_window_s": 6.457821369171143,
+        "runner_window_s": 6.525390148162842,
+        "harness_wall_s": 6.5801215171813965,
+        "chunks": 207,
+        "chunks_per_s": 32.05415389595521,
+        "audio_s": 388.36,
+        "audio_s_per_s": 60.13792853639211,
+        "individual_makespan_median_s": 4.091191053390503,
+        "individual_makespan_max_s": 6.436627626419067,
+        "failed": 0,
+        "degraded": 0
+      },
+      "wav_validation": {
+        "files": 207,
+        "invalid": 0,
+        "pcm16_24k_mono": true
+      },
+      "resource_summary": {
+        "samples": 33,
+        "api_rss_kb": {
+          "min": 69644.0,
+          "median": 70424.0,
+          "p95": 74376.0,
+          "max": 74376.0
+        },
+        "gpu_memory_mib": {
+          "min": 83591.0,
+          "median": 83591.0,
+          "p95": 83591.0,
+          "max": 83591.0
+        },
+        "gpu_util_pct": {
+          "min": 0.0,
+          "median": 68.0,
+          "p95": 92.0,
+          "max": 94.0
+        },
+        "gpu_memory_util_pct": {
+          "min": 0.0,
+          "median": 40.0,
+          "p95": 61.0,
+          "max": 63.0
+        },
+        "power_w": {
+          "min": 82.41,
+          "median": 214.09,
+          "p95": 259.094,
+          "max": 265.92
+        }
+      },
+      "errors": {
+        "api_matches": 0,
+        "sglang_matches": 0,
+        "oom_matches": 0
+      },
+      "paths": {
+        "root": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-3jobs",
+        "resource_metrics": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-3jobs/resource-metrics.csv",
+        "api_log_window": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-3jobs/api-log-window.log",
+        "sglang_log_window": "/root/autodl-tmp/canary-runs/bridge-d4b0acc-burst20-20260720/fairness-3jobs/sglang-log-window.log"
+      }
+    }
+  ],
+  "safety": {
+    "all_jobs_succeeded": true,
+    "failed": 0,
+    "degraded": 0,
+    "api_error_matches": 0,
+    "sglang_error_matches": 0,
+    "oom_matches": 0
+  },
+  "post_health": {
+    "status": "ok",
+    "sglang_ready": true,
+    "active_tts_jobs": 0,
+    "outstanding_chunks": 0
+  }
+}
