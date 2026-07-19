@@ -88,6 +88,33 @@ completion-token/audio-duration distributions, zero quality-retry warnings in
 the measured window, no CUDA/OOM errors, GPU/CPU resource sampling, and
 API/SGLang health after the run.
 
+## Canary result (2026-07-20)
+
+- Candidate full-diff SHA-256: `6f8504a3230652a8bc1f6b943fe878900ef99a84251f810fcb3b52bcf09cd5b3`.
+- GPU gate: 50/50 targeted tests passed, including async parity and the real
+  CUDA pinned-buffer path.
+- Exact fixture: task `7b66bc83-e5d5-48be-af5a-306a72d26bd4`, voice
+  `fcxDguohxleZaemvsuHB`, 69 WAV cues, one warmup plus ten measured runs.
+- Safety: 10/10 measured runs, 690/690 measured cues, zero retry/error/degraded,
+  and 759/759 WAV files valid across warmup and measured runs.
+- Candidate versus baseline p50: makespan -1.79%, runner wall -1.92%,
+  chunks/s +1.82%, and generated-audio-seconds/s +2.02%.
+- Candidate versus baseline p95 latency: makespan -2.27% and runner wall
+  -1.63%. Mean output tokens and duration changed by only -0.054% and -0.062%,
+  so the speedup is not explained by shorter generated audio.
+- GPU utilization and VRAM were unchanged; API RSS p50 increased by 388 KiB.
+
+Ten runs show a consistent low-single-digit trend but are not enough for a 95%
+confidence production decision. Keep this source active only on the test
+canary; run a larger or interleaved A/B before production promotion.
+
+Local evidence:
+
+- `generated/canary-sglang-1008a/baseline-report.json`
+  (`6fa52e77a9cd393c3be829271e3259a9df093e3840ec8935b8c19396778994d0`)
+- `generated/canary-sglang-1008a/candidate-report.json`
+  (`19f192a6b3f4e99b46519d4858f3f6a0c3a84b5a5462a8018bafbc2115389aa2`)
+
 ## Rollback
 
 The production-sim source tree stays immutable. Roll back by restoring the
