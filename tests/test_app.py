@@ -459,13 +459,61 @@ def test_job_payload_includes_audio_url_only_when_succeeded(api):
 
 
 @pytest.mark.asyncio
-async def test_max_volume_detects_silence(api):
+async def test_max_volume_detects_silence_without_ffmpeg(api, monkeypatch):
+    async def should_not_spawn(*_args, **_kwargs):
+        raise AssertionError("PCM WAV peak phải đi native path, không spawn ffmpeg")
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", should_not_spawn)
     silent = await api._max_volume_dbfs(wav_bytes())       # toàn 0 → câm
     loud = await api._max_volume_dbfs(tone_wav_bytes())    # sóng vuông biên độ lớn
-    if silent is None or loud is None:
-        pytest.skip("ffmpeg không có trong môi trường test")
+    assert silent is not None and loud is not None
     assert silent < -50          # câm
     assert loud > -50            # có tiếng
+
+
+@pytest.mark.asyncio
+async def test_max_volume_keeps_ffmpeg_fallback_for_non_wav(api, monkeypatch):
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self, _audio):
+            return b"", b"[Parsed_volumedetect] max_volume: -12.3 dB"
+
+    async def fake_spawn(*args, **_kwargs):
+        assert "volumedetect" in args
+        assert args[args.index("-threads") + 1] == "1"
+        return FakeProcess()
+
+    monkeypatch.setattr(api.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", fake_spawn)
+    assert await api._max_volume_dbfs(b"ID3-not-a-wav") == pytest.approx(-12.3)
+
+
+@pytest.mark.asyncio
+async def test_sglang_http_client_is_reused_and_closed(api, monkeypatch):
+    created = []
+
+    class FakeClient:
+        is_closed = False
+
+        async def aclose(self):
+            self.is_closed = True
+
+    def make_client(*_args, **_kwargs):
+        client = FakeClient()
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", make_client)
+    api.sglang_http_client = None
+    first = await api._get_sglang_client()
+    second = await api._get_sglang_client()
+    assert first is second
+    assert len(created) == 1
+
+    await api.shutdown()
+    assert first.is_closed is True
+    assert api.sglang_http_client is None
 
 
 @pytest.mark.asyncio
@@ -542,18 +590,27 @@ async def test_call_sglang_annotates_completeness_bands(tmp_path, monkeypatch):
     ref = api.ReferenceCacheEntry(audio_path=_P("/tmp/none"), transcript="t", audio_cache_hit=True)
 
     # đọc THIẾU (early-EOS): completion << kỳ vọng → quality_issue, KHÔNG raise
-    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(int(expected * 0.3)))
+    async def early_client():
+        return make_client(int(expected * 0.3))
+
+    monkeypatch.setattr(api, "_get_sglang_client", early_client)
     res = await api._call_sglang(text, req, ref)
     assert res.quality_issue == "early_eos"
     assert res.expected_tokens == expected
 
     # band giữa: audio hoàn chỉnh → không issue
-    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(int(expected * 0.9)))
+    async def complete_client():
+        return make_client(int(expected * 0.9))
+
+    monkeypatch.setattr(api, "_get_sglang_client", complete_client)
     res = await api._call_sglang(text, req, ref)
     assert res.quality_issue is None
 
     # chạm cap: runaway (đuôi câm) → quality_issue, KHÔNG raise
-    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: make_client(cap))
+    async def runaway_client():
+        return make_client(cap)
+
+    monkeypatch.setattr(api, "_get_sglang_client", runaway_client)
     res = await api._call_sglang(text, req, ref)
     assert res.quality_issue == "runaway"
 

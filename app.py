@@ -10,6 +10,7 @@ import os
 import random
 import re
 import shutil
+import sys
 import time
 import uuid
 import wave
@@ -135,6 +136,7 @@ _RE_ARABIC = re.compile("[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\u
 _RE_THAI = re.compile("[\u0e00-\u0e7f]")
 _RE_DEVANAGARI = re.compile("[\u0900-\u097f]")
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
+FFMPEG_THREADS = max(1, int(os.getenv("FFMPEG_THREADS", "1")))
 # P1 speaker-boost-on-bridge: worker gửi af_filter (chuỗi -af gồm atempo+boost) → áp khi encode
 # WAV→MP3 từng chunk, trả MP3 đã boost (worker chỉ concat-copy). Giới hạn riêng + nice để KHÔNG
 # tranh CPU feed-GPU (container cgroup ~22 core).
@@ -283,6 +285,8 @@ jobs_lock = asyncio.Lock()
 outstanding_chunks = 0
 outstanding_chunks_lock = asyncio.Lock()
 cleanup_task: Optional[asyncio.Task] = None
+sglang_http_client: Optional[httpx.AsyncClient] = None
+sglang_http_client_lock = asyncio.Lock()
 
 
 class TTSRequest(BaseModel):
@@ -775,7 +779,9 @@ async def _measure_loudnorm(af: str, wav_bytes: bytes) -> Optional[dict]:
     await ffmpeg_post_semaphore.acquire()
     try:
         args = _FFMPEG_NICE_PREFIX + [
-            FFMPEG_BIN, "-hide_banner", "-nostats", "-f", "wav", "-i", "pipe:0",
+            FFMPEG_BIN, "-hide_banner", "-nostats",
+            "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
+            "-f", "wav", "-i", "pipe:0",
             "-af", measure_af, "-f", "null", "-",
         ]
         process = await asyncio.create_subprocess_exec(
@@ -879,7 +885,10 @@ async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None, af_final: bool
     # Path KHÔNG boost: giữ nguyên perf (không nice/semaphore, không re-filter).
     if not af:
         process = await asyncio.create_subprocess_exec(
-            FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0", "-f", "mp3", "pipe:1",
+            FFMPEG_BIN, "-hide_banner", "-loglevel", "error",
+            "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
+            "-f", "wav", "-i", "pipe:0", "-threads", str(FFMPEG_THREADS),
+            "-f", "mp3", "pipe:1",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -897,8 +906,11 @@ async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None, af_final: bool
         eff_af = af if af_final else _short_loudnorm_padcut(af, wav_bytes)
         # Boost-on-bridge: ÉP codec KHỚP worker FINAL_MP3 (libmp3lame 128k 44.1k stereo) → worker concat-copy.
         args = _FFMPEG_NICE_PREFIX + [
-            FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+            FFMPEG_BIN, "-hide_banner", "-loglevel", "error",
+            "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
+            "-f", "wav", "-i", "pipe:0",
             "-af", eff_af, "-c:a", "libmp3lame", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-threads", str(FFMPEG_THREADS),
             "-f", "mp3", "pipe:1",
         ]
         process = await asyncio.create_subprocess_exec(
@@ -1062,13 +1074,68 @@ def _header_float(headers: httpx.Headers, key: str) -> float:
         return 0.0
 
 
+async def _get_sglang_client() -> httpx.AsyncClient:
+    """Một connection pool dùng chung cho traffic nội bộ tới SGLang."""
+    global sglang_http_client
+    if sglang_http_client is not None and not sglang_http_client.is_closed:
+        return sglang_http_client
+    async with sglang_http_client_lock:
+        if sglang_http_client is None or sglang_http_client.is_closed:
+            pool_size = MAX_CONCURRENT_CHUNKS + 4  # chừa headroom cho health/retry khi generation đầy lane
+            sglang_http_client = httpx.AsyncClient(
+                timeout=REQUEST_TIMEOUT,
+                limits=httpx.Limits(
+                    max_connections=pool_size,
+                    max_keepalive_connections=pool_size,
+                    keepalive_expiry=30.0,
+                ),
+            )
+    return sglang_http_client
+
+
+def _wav_peak_dbfs(audio_bytes: bytes) -> Optional[float]:
+    """Peak dBFS của PCM16 WAV SGLang; None để caller fallback FFmpeg."""
+    if not _is_wav(audio_bytes):
+        return None
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as reader:
+            if reader.getcomptype() != "NONE":
+                return None
+            if reader.getsampwidth() != 2:
+                return None
+            frames = reader.readframes(reader.getnframes())
+    except (EOFError, OSError, wave.Error):
+        return None
+
+    if not frames:
+        return None
+
+    samples = array.array("h")
+    samples.frombytes(frames[:len(frames) - len(frames) % 2])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return None
+    peak = max(max(samples), -min(samples))
+
+    if peak <= 0:
+        return float("-inf")
+    return 20.0 * math.log10(peak / 32768.0)
+
+
 async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
-    """max_volume (dBFS) của audio qua ffmpeg volumedetect. None nếu không phân tích được."""
-    if not audio_bytes or not shutil.which(FFMPEG_BIN):
+    """Peak dBFS: PCM WAV native; format khác fallback ffmpeg volumedetect."""
+    if not audio_bytes:
+        return None
+    native = await asyncio.to_thread(_wav_peak_dbfs, audio_bytes)
+    if native is not None:
+        return native
+    if not shutil.which(FFMPEG_BIN):
         return None
     try:
         proc = await asyncio.create_subprocess_exec(
             FFMPEG_BIN, "-hide_banner", "-nostats",
+            "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
             "-i", "pipe:0", "-af", "volumedetect", "-f", "null", "-",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.DEVNULL,
@@ -1099,8 +1166,8 @@ async def _call_sglang(
         payload["seed"] = seed_override
     if max_new_override is not None:  # reactive KV-fit (retry sau lỗi KV overflow)
         payload["max_new_tokens"] = max_new_override
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        response = await client.post(f"{SGLANG_BASE_URL}/v1/audio/speech", json=payload)
+    client = await _get_sglang_client()
+    response = await client.post(f"{SGLANG_BASE_URL}/v1/audio/speech", json=payload)
 
     if response.status_code >= 400:
         detail = response.text[:500]
@@ -1588,8 +1655,8 @@ async def _job_counts() -> dict[str, int]:
 
 async def _sglang_health() -> tuple[bool, Optional[Any]]:
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{SGLANG_BASE_URL}/health")
+        client = await _get_sglang_client()
+        response = await client.get(f"{SGLANG_BASE_URL}/health", timeout=5.0)
         if response.status_code >= 400:
             return False, {"status_code": response.status_code, "body": response.text[:500]}
         try:
@@ -1674,17 +1741,22 @@ async def _periodic_cleanup() -> None:
 async def startup() -> None:
     global cleanup_task
     _ensure_dirs()
+    await _get_sglang_client()
     cleanup_task = asyncio.create_task(_periodic_cleanup())
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    global sglang_http_client
     if cleanup_task is not None:
         cleanup_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
             pass
+    if sglang_http_client is not None and not sglang_http_client.is_closed:
+        await sglang_http_client.aclose()
+    sglang_http_client = None
 
 
 @app.get("/health")
