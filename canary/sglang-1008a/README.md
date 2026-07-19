@@ -31,8 +31,8 @@ separate canary if streaming is enabled later.
 ## Patch order
 
 1. `0001-test-align-production-fixtures.patch` only updates stale upstream test
-   doubles for the six-file production overlay. Before it, the exact baseline
-   has four known fixture failures (two `context_turns`, two `recent_codes`).
+   doubles for the production overlay: two prompt-builder signatures missing
+   `context_turns` and four CUDA-graph fixture builders missing `recent_codes`.
 2. `0002-preallocate-output-code-buffer.patch` contains the two runtime changes
    and targeted result-adapter/eager/CG tests.
 
