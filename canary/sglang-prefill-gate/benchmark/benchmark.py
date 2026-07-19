@@ -557,7 +557,8 @@ def wait_for_profile_flush(event_dir: Path) -> list[Path]:
 
 def download_sha256(url: str) -> str:
     digest = hashlib.sha256()
-    with urllib.request.urlopen(url, timeout=60) as response:
+    request = urllib.request.Request(url, headers={"User-Agent": "curl/7.81.0"})
+    with urllib.request.urlopen(request, timeout=60) as response:
         for block in iter(lambda: response.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
