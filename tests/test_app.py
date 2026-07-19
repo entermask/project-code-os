@@ -143,6 +143,7 @@ async def test_submit_poll_and_download_audio(client):
         raise AssertionError("job did not succeed")
 
     assert body["chunks_completed"] == 2
+    assert body["in_flight_limit"] == 2
     assert body["cache_hit"] is False
     assert body["transcript"] == "reference transcript"
     assert body["usage"]["prompt_tokens"] == 20
@@ -514,6 +515,97 @@ async def test_sglang_http_client_is_reused_and_closed(api, monkeypatch):
     await api.shutdown()
     assert first.is_closed is True
     assert api.sglang_http_client is None
+
+
+def test_job_in_flight_limit_uses_burst_only_for_few_same_lane_jobs(api, monkeypatch):
+    monkeypatch.setattr(api, "MAX_IN_FLIGHT_CHUNKS_PER_JOB", 10)
+    monkeypatch.setattr(api, "MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB", 20)
+    monkeypatch.setattr(api, "MAX_BURST_ACTIVE_JOBS", 2)
+    assert api._job_in_flight_limit(1, 69) == 20
+    assert api._job_in_flight_limit(2, 69) == 20
+    assert api._job_in_flight_limit(3, 69) == 10
+    assert api._job_in_flight_limit(1, 4) == 4
+
+
+def test_active_job_count_is_lane_local(api):
+    now = 1.0
+    api.jobs.update({
+        "long-queued": api.TTSJob(
+            request_id="long-queued", status="queued", created_at=now, updated_at=now,
+            format="wav", chunks_total=69, lane="long",
+        ),
+        "long-running": api.TTSJob(
+            request_id="long-running", status="running", created_at=now, updated_at=now,
+            format="wav", chunks_total=69, lane="long",
+        ),
+        "short-running": api.TTSJob(
+            request_id="short-running", status="running", created_at=now, updated_at=now,
+            format="wav", chunks_total=2, lane="short",
+        ),
+        "long-done": api.TTSJob(
+            request_id="long-done", status="succeeded", created_at=now, updated_at=now,
+            format="wav", chunks_total=69, lane="long",
+        ),
+    })
+    assert api._active_same_lane_job_count("long") == 2
+    assert api._active_same_lane_job_count("short") == 1
+
+
+@pytest.mark.asyncio
+async def test_job_permit_keeps_mp3_postprocess_backpressure(api, tmp_path, monkeypatch):
+    api.outstanding_chunks = 2
+    now = 1.0
+    api.jobs["post-job"] = api.TTSJob(
+        request_id="post-job", status="queued", created_at=now, updated_at=now,
+        format="mp3", chunks_total=2,
+    )
+    req = api.TTSRequest(
+        chunks=["one", "two"], ref_audio_url="https://x/ref.wav", ref_text="ref", format="mp3",
+    )
+    ref = api.ReferenceCacheEntry(
+        audio_path=tmp_path / "ref.wav", transcript="ref", audio_cache_hit=True,
+    )
+    encode_started = asyncio.Event()
+    release_encode = asyncio.Event()
+    second_rendered = asyncio.Event()
+    render_calls = 0
+    encode_calls = 0
+
+    async def fake_render(*_args, **_kwargs):
+        nonlocal render_calls
+        render_calls += 1
+        if render_calls == 2:
+            second_rendered.set()
+        return api.ChunkResult(audio_bytes=wav_bytes())
+
+    async def fake_encode(_wav, af=None, af_final=False):
+        nonlocal encode_calls
+        encode_calls += 1
+        if encode_calls == 1:
+            encode_started.set()
+            await release_encode.wait()
+        return b"ID3-fake-mp3"
+
+    monkeypatch.setattr(api, "_render_chunk", fake_render)
+    monkeypatch.setattr(api, "_wav_to_mp3", fake_encode)
+    job_semaphore = asyncio.Semaphore(1)
+    first = asyncio.create_task(api._generate_one_chunk(
+        "post-job", 0, "one", req, ref, tmp_path / "one.mp3", "default", job_semaphore,
+    ))
+    await encode_started.wait()
+    second = asyncio.create_task(api._generate_one_chunk(
+        "post-job", 1, "two", req, ref, tmp_path / "two.mp3", "default", job_semaphore,
+    ))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not second_rendered.is_set()
+    assert render_calls == 1
+    release_encode.set()
+    await asyncio.gather(first, second)
+    assert second_rendered.is_set()
+    assert render_calls == 2
+    assert (tmp_path / "one.mp3").read_bytes().startswith(b"ID3")
+    assert (tmp_path / "two.mp3").read_bytes().startswith(b"ID3")
 
 
 @pytest.mark.asyncio

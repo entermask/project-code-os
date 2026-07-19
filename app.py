@@ -57,6 +57,14 @@ SHORT_REQUEST_MAX_CHARS = max(1, int(os.getenv("SHORT_REQUEST_MAX_CHARS", "1000"
 SHORT_REQUEST_MAX_CHUNKS = max(1, int(os.getenv("SHORT_REQUEST_MAX_CHUNKS", "4")))
 LONG_CONCURRENT_CHUNKS = MAX_CONCURRENT_CHUNKS - SHORT_RESERVED_CHUNKS
 MAX_IN_FLIGHT_CHUNKS_PER_JOB = max(1, int(os.getenv("MAX_IN_FLIGHT_CHUNKS_PER_JOB", "12")))
+MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB = min(
+    MAX_CONCURRENT_CHUNKS,
+    max(
+        MAX_IN_FLIGHT_CHUNKS_PER_JOB,
+        int(os.getenv("MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB", str(MAX_IN_FLIGHT_CHUNKS_PER_JOB))),
+    ),
+)
+MAX_BURST_ACTIVE_JOBS = max(1, int(os.getenv("MAX_BURST_ACTIVE_JOBS", "2")))
 BUSY_BACKLOG_CHUNKS = max(1, int(os.getenv("BUSY_BACKLOG_CHUNKS", "32")))
 # Per-chunk retry: lỗi tạm từ SGLang (5xx/CUDA/network) hoặc audio rỗng/quá nhỏ
 # sẽ được sinh lại tối đa CHUNK_RETRY_ATTEMPTS lần thay vì giết cả job ngay.
@@ -354,6 +362,7 @@ class TTSJob:
     chunks_degraded: int = 0
     input_chars: int = 0
     lane: str = "default"
+    in_flight_limit: Optional[int] = None
     detail: Optional[str] = None
     chunk_paths: Optional[list[Path]] = None
     chunk_media_type: Optional[str] = None
@@ -439,6 +448,23 @@ async def _lane_slot(lane: str):
     finally:
         lane_inflight[lane] = max(0, lane_inflight.get(lane, 0) - 1)
         sem.release()
+
+
+def _job_in_flight_limit(active_same_lane_jobs: int, chunks_total: int) -> int:
+    """Chọn quota tĩnh khi job bắt đầu; không đánh thức hàng nghìn coroutine khi tải cao."""
+    configured_limit = MAX_IN_FLIGHT_CHUNKS_PER_JOB
+    if active_same_lane_jobs <= MAX_BURST_ACTIVE_JOBS:
+        configured_limit = MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB
+    return max(1, min(configured_limit, chunks_total))
+
+
+def _active_same_lane_job_count(lane: str) -> int:
+    """Đếm job có nhu cầu cùng lane; caller production phải đang giữ jobs_lock."""
+    return sum(
+        1
+        for candidate in jobs.values()
+        if candidate.lane == lane and candidate.status in {"queued", "running"}
+    )
 
 
 async def _mark_job_started(request_id: str) -> None:
@@ -1392,10 +1418,9 @@ async def _generate_one_chunk(
     job_semaphore: asyncio.Semaphore,
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> ChunkResult:
+    # Per-job permit bọc trọn vòng đời chunk để giới hạn cả WAV đang chờ hậu kỳ trong RAM.
+    # Lane slot chỉ bọc generation (GPU); ffmpeg hậu kỳ có semaphore riêng.
     async with job_semaphore:
-        # Lane slot CHỈ bọc phần generation (SGLang chiếm GPU). Hậu kỳ bên dưới là CPU/ffmpeg
-        # đã có ffmpeg_post_semaphore riêng — bản cũ giữ lane slot qua cả anchor-wait loudnorm
-        # (tới 120s ngồi không) + encode làm lane short 4-slot nghẹt oan (RCA 2026-07-10).
         async with _lane_slot(lane):
             await _mark_job_started(request_id)
             result = await _render_chunk(request_id, chunk_index, text, req, ref, context=context)
@@ -1495,9 +1520,13 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                 job.chunk_paths = output_paths
                 job.chunk_media_type = _media_type_for_format(req.format)
                 job.updated_at = time.time()
+            lane = job.lane if job else _request_lane(req)
+            active_same_lane_jobs = _active_same_lane_job_count(lane)
+            in_flight_limit = _job_in_flight_limit(active_same_lane_jobs, len(req.chunks))
+            if job is not None:
+                job.in_flight_limit = in_flight_limit
 
-        lane = job.lane if job else _request_lane(req)
-        job_semaphore = asyncio.Semaphore(min(MAX_IN_FLIGHT_CHUNKS_PER_JOB, len(req.chunks)))
+        job_semaphore = asyncio.Semaphore(in_flight_limit)
 
         if req.multi_turn:
             # Natural mode: chunks run SEQUENTIALLY, each grounded on the
@@ -1550,7 +1579,11 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                     break
         else:
             tasks = [
-                asyncio.create_task(_generate_one_chunk(request_id, index, text, req, ref, output_paths[index], lane, job_semaphore))
+                asyncio.create_task(
+                    _generate_one_chunk(
+                        request_id, index, text, req, ref, output_paths[index], lane, job_semaphore,
+                    )
+                )
                 for index, text in enumerate(req.chunks)
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1615,6 +1648,8 @@ def _job_payload(job: TTSJob) -> dict[str, Any]:
         "lane": job.lane,
         "format": job.format,
     }
+    if job.in_flight_limit is not None:
+        payload["in_flight_limit"] = job.in_flight_limit
     if job.detail:
         payload["detail"] = job.detail
     # Shared-gain loudnorm: worker đọc từ batch đầu → truyền `ln_measured` cho batch sau của cùng task
@@ -1782,6 +1817,8 @@ async def health() -> dict[str, Any]:
         "short_request_max_chars": SHORT_REQUEST_MAX_CHARS,
         "short_request_max_chunks": SHORT_REQUEST_MAX_CHUNKS,
         "max_in_flight_chunks_per_job": MAX_IN_FLIGHT_CHUNKS_PER_JOB,
+        "max_burst_in_flight_chunks_per_job": MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB,
+        "max_burst_active_jobs": MAX_BURST_ACTIVE_JOBS,
         "busy_backlog_chunks": BUSY_BACKLOG_CHUNKS,
         "outstanding_chunks": current_outstanding,
         "lane_inflight": dict(lane_inflight),
