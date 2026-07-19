@@ -141,19 +141,23 @@ requests, set `SPEECH_MODEL=bosonai/higgs-audio-v3-tts-4b` for the API process.
 
 ## Production Tuning
 
-For long text, split client chunks around 150-220 characters. The current
-measured production-shaped sweet spot for Higgs Audio v3 is:
+For long text, split client chunks around 150-220 characters. The production
+baseline captured on 2026-07-19 is:
 
 ```text
-MAX_CONCURRENT_CHUNKS=16
+MAX_CONCURRENT_CHUNKS=96
 MAX_IN_FLIGHT_CHUNKS_PER_JOB=10
 BUSY_BACKLOG_CHUNKS=2000
-SHORT_RESERVED_CHUNKS=0
+SHORT_RESERVED_CHUNKS=4
+SGLANG_EXTRA_ARGS="--stages.2.factory_args.server_args_overrides.attention_backend triton"
 ```
 
-`MAX_CONCURRENT_CHUNKS` controls active backend generation. `BUSY_BACKLOG_CHUNKS`
-only controls how much queued/running chunk work the API accepts before `429`;
-raising it does not increase GPU throughput.
+This baseline also uses the production SGLang patch with
+`max_running_requests=96` and `cuda_graph_max_bs=96`; setting only the bridge
+variable does not raise SGLang's internal cap. `BUSY_BACKLOG_CHUNKS` only
+controls how much queued/running chunk work the API accepts before `429`.
+See [`prod-current/PRODUCTION_MANIFEST.md`](prod-current/PRODUCTION_MANIFEST.md)
+for the exact commit, hashes, runtime scripts, and sanitized environment.
 
 ## API
 
