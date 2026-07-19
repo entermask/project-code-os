@@ -64,7 +64,10 @@ python -m pytest -q \
 
 Then boot the candidate from a separate source tree while preserving cap 96,
 CUDA graph 96, Triton attention, the same model/venv/env, and the current bridge
-commit. Restart only `higgs_sglang`; do not restart the bridge for this phase.
+commit. `runtime/higgs-sglang-1008a.sh` differs from the production-sim launcher
+only in `SOURCE_ROOT`. Back up the active launcher, deploy this committed file to
+the supervisor's existing launcher path, and restart only `higgs_sglang`; do not
+restart the bridge for this phase. Verify the bridge PID is unchanged.
 
 Run the exact task `7b66bc83-e5d5-48be-af5a-306a72d26bd4`, voice
 `fcxDguohxleZaemvsuHB`, 69 cues in one WAV job, one warmup plus at least ten
