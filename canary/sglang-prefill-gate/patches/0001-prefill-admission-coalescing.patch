@@ -1,0 +1,247 @@
+diff --git a/sglang_omni/models/higgs_tts/stages.py b/sglang_omni/models/higgs_tts/stages.py
+index 2357ce6..aa17de3 100644
+--- a/sglang_omni/models/higgs_tts/stages.py
++++ b/sglang_omni/models/higgs_tts/stages.py
+@@ -489,0 +490,2 @@ def create_sglang_tts_engine_executor(
++    prefill_coalesce_requests: int = 0,
++    prefill_coalesce_wait_ms: float = 60.0,
+@@ -554,0 +557,2 @@ def create_sglang_tts_engine_executor(
++        prefill_coalesce_requests=prefill_coalesce_requests,
++        prefill_coalesce_wait_ms=prefill_coalesce_wait_ms,
+diff --git a/sglang_omni/scheduling/omni_scheduler.py b/sglang_omni/scheduling/omni_scheduler.py
+index f732479..ecfe1ee 100644
+--- a/sglang_omni/scheduling/omni_scheduler.py
++++ b/sglang_omni/scheduling/omni_scheduler.py
+@@ -115,0 +116,2 @@ class OmniScheduler:
++        prefill_coalesce_requests: int = 0,
++        prefill_coalesce_wait_ms: float = 60.0,
+@@ -155,0 +158,14 @@ class OmniScheduler:
++        # Note(maydomine): Prefill admission coalescing: hold prefill until K requests are
++        # waiting or the oldest has waited T ms, amortizing the per-step host
++        # cost (mostly batch-size-independent) over more requests. 0 = off.
++        if int(prefill_coalesce_requests) > 1 and int(server_args.tp_size) > 1:
++            logger.warning(
++                "Prefill admission coalescing is disabled for "
++                f"tp_size={server_args.tp_size}: the wait deadline reads each "
++                "rank's local clock, so ranks could disagree on expiry and "
++                "break lockstep scheduling"
++            )
++            prefill_coalesce_requests = 0
++        self.prefill_coalesce_requests = int(prefill_coalesce_requests)
++        self.prefill_coalesce_wait_s = float(prefill_coalesce_wait_ms) / 1e3
++
+@@ -541,0 +558,2 @@ class OmniScheduler:
++            if not hasattr(req, "_coalesce_enqueue_t"):
++                req._coalesce_enqueue_t = time.perf_counter()
+@@ -624,0 +643,23 @@ class OmniScheduler:
++    def get_new_batch_prefill(self):
++        # NOTE(maydomine): requests often arrive faster than they batch, so the
++        # loop burns its time on tiny prefill batches. Hold admission until the
++        # batch is worth its fixed step cost; the deadline is measured from the
++        # oldest queued request, so partial admission or aborts never restart it.
++        if self.prefill_coalesce_requests <= 1 or self.chunked_req is not None:
++            return _Upstream.get_new_batch_prefill(self)
++        if self.running_batch is None or self.running_batch.is_empty():
++            return _Upstream.get_new_batch_prefill(self)
++        waiting = self.waiting_queue
++        if not waiting or len(waiting) >= self.prefill_coalesce_requests:
++            return _Upstream.get_new_batch_prefill(self)
++        now = time.perf_counter()
++        oldest = now
++        for req in waiting:
++            t = getattr(req, "_coalesce_enqueue_t", None)
++            if t is None:
++                t = req._coalesce_enqueue_t = now
++            oldest = min(oldest, t)
++        if now - oldest >= self.prefill_coalesce_wait_s:
++            return _Upstream.get_new_batch_prefill(self)
++        return None
++
+diff --git a/tests/unit_test/scheduling/test_prefill_coalesce_gate.py b/tests/unit_test/scheduling/test_prefill_coalesce_gate.py
+new file mode 100644
+index 0000000..2572eae
+--- /dev/null
++++ b/tests/unit_test/scheduling/test_prefill_coalesce_gate.py
+@@ -0,0 +1,182 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Behavior tests for the prefill admission-coalescing gate.
++
++The gate holds prefill until ``prefill_coalesce_requests`` are waiting or the
++oldest queued request has waited ``prefill_coalesce_wait_ms``. The deadline is
++keyed on each request's enqueue time (``_coalesce_enqueue_t``), so partial
++upstream admission or an aborted request never restarts the window for the
++requests left behind. Chunked prefill in flight and an empty queue pass
++straight through. Tested against a stub scheduler with the upstream call
++patched to a sentinel.
++"""
++
++from __future__ import annotations
++
++from types import SimpleNamespace
++from unittest import mock
++
++import pytest
++
++pytest.importorskip("sglang")
++
++from sglang_omni.scheduling import omni_scheduler  # noqa: E402
++from sglang_omni.scheduling.omni_scheduler import OmniScheduler  # noqa: E402
++
++_UPSTREAM_BATCH = object()
++
++
++def _req(enqueue_t: float | None):
++    if enqueue_t is None:
++        return SimpleNamespace()
++    return SimpleNamespace(_coalesce_enqueue_t=enqueue_t)
++
++
++class _StubScheduler:
++    """The attribute surface get_new_batch_prefill touches."""
++
++    def __init__(self, *, coalesce_requests: int, wait_ms: float = 60.0) -> None:
++        self.prefill_coalesce_requests = coalesce_requests
++        self.prefill_coalesce_wait_s = wait_ms / 1e3
++        self.chunked_req = None
++        self.waiting_queue: list = []
++        self.running_batch = SimpleNamespace(is_empty=lambda: False)
++
++    def get_new_batch_prefill(self):
++        return OmniScheduler.get_new_batch_prefill(self)
++
++
++@pytest.fixture()
++def upstream():
++    with mock.patch.object(
++        omni_scheduler._Upstream,
++        "get_new_batch_prefill",
++        return_value=_UPSTREAM_BATCH,
++    ) as patched:
++        yield patched
++
++
++@pytest.fixture()
++def clock():
++    with mock.patch.object(omni_scheduler.time, "perf_counter") as patched:
++        patched.return_value = 100.0
++        yield patched
++
++
++def test_disabled_gate_passes_through(upstream):
++    sched = _StubScheduler(coalesce_requests=0)
++    sched.waiting_queue = [_req(0.0)]
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++
++
++def test_chunked_prefill_bypasses_gate(upstream):
++    sched = _StubScheduler(coalesce_requests=8)
++    sched.waiting_queue = [_req(0.0)]
++    sched.chunked_req = object()
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++
++
++def test_empty_queue_passes_through(upstream):
++    sched = _StubScheduler(coalesce_requests=8)
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++
++
++def test_full_batch_passes_through_immediately(upstream):
++    sched = _StubScheduler(coalesce_requests=4)
++    sched.waiting_queue = [_req(100.0)] * 4
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++
++
++def test_small_queue_is_held_until_oldest_expires(upstream, clock):
++    sched = _StubScheduler(coalesce_requests=8, wait_ms=60.0)
++    sched.waiting_queue = [_req(100.0), _req(100.01)]
++
++    clock.return_value = 100.03
++    assert sched.get_new_batch_prefill() is None
++
++    clock.return_value = 100.07
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++    upstream.assert_called_once()
++
++
++def test_reaching_target_releases_before_deadline(upstream, clock):
++    sched = _StubScheduler(coalesce_requests=3, wait_ms=60.0)
++    sched.waiting_queue = [_req(100.0)]
++    assert sched.get_new_batch_prefill() is None
++
++    sched.waiting_queue = [_req(100.0)] * 3
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++
++
++def test_partial_admission_leftovers_keep_their_deadline(upstream, clock):
++    def admit_one(scheduler):
++        scheduler.waiting_queue.pop(0)
++        return _UPSTREAM_BATCH
++
++    upstream.side_effect = admit_one
++    sched = _StubScheduler(coalesce_requests=8, wait_ms=60.0)
++    clock.return_value = 100.1
++    leftover = _req(100.02)
++    sched.waiting_queue = [_req(100.0), leftover]
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++    assert sched.waiting_queue == [leftover]
++
++    # Re-entering the gate after upstream admitted only part of the wave must
++    # release the leftover immediately, not start a fresh 60 ms window.
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++    assert sched.waiting_queue == []
++    assert upstream.call_count == 2
++
++
++def test_abort_does_not_hand_newcomers_an_expired_deadline(upstream, clock):
++    sched = _StubScheduler(coalesce_requests=8, wait_ms=60.0)
++    sched._mark_running_request_aborted = lambda request_id: False
++    sched._abort_callback = None
++    sched._aborted_request_ids = set()
++    sched._pending_stream_chunks = {}
++    sched._pending_stream_done = set()
++    sched._deferred_request_payloads = {}
++    sched._dirty_deferred_request_ids = set()
++    sched._first_emit_done = set()
++    sched._prefill_start_done = set()
++    sched._release_immediate_request_resources = lambda request_id: None
++    sched.running_batch = SimpleNamespace(
++        reqs=[], batch_is_full=False, is_empty=lambda: False
++    )
++    sched.cur_batch = None
++    sched.last_batch = None
++    sched._async_pending_batch = lambda: None
++    sched._drain_inbox_for_request = lambda request_id: None
++
++    clock.return_value = 100.1
++    oldest = SimpleNamespace(rid="oldest", _coalesce_enqueue_t=100.0)
++    newcomer = SimpleNamespace(rid="newcomer", _coalesce_enqueue_t=100.09)
++    sched.waiting_queue = [oldest, newcomer]
++    OmniScheduler.abort(sched, "oldest")
++
++    assert sched.waiting_queue == [newcomer]
++    assert sched.get_new_batch_prefill() is None
++
++
++def test_idle_loop_bypasses_gate(upstream):
++    sched = _StubScheduler(coalesce_requests=8)
++    sched.waiting_queue = [_req(0.0)]
++    sched.running_batch = None
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++
++    sched.running_batch = SimpleNamespace(is_empty=lambda: True)
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
++
++
++def test_unstamped_request_is_stamped_and_eventually_released(upstream, clock):
++    sched = _StubScheduler(coalesce_requests=8, wait_ms=60.0)
++    clock.return_value = 200.0
++    req = _req(None)
++    sched.waiting_queue = [req]
++    assert sched.get_new_batch_prefill() is None
++    assert req._coalesce_enqueue_t == 200.0
++
++    clock.return_value = 200.03
++    assert sched.get_new_batch_prefill() is None
++
++    clock.return_value = 200.07
++    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
