@@ -147,6 +147,8 @@ baseline captured on 2026-07-19 is:
 ```text
 MAX_CONCURRENT_CHUNKS=96
 MAX_IN_FLIGHT_CHUNKS_PER_JOB=10
+MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB=20
+MAX_BURST_ACTIVE_JOBS=2
 BUSY_BACKLOG_CHUNKS=2000
 SHORT_RESERVED_CHUNKS=4
 SGLANG_EXTRA_ARGS="--stages.2.factory_args.server_args_overrides.attention_backend triton"
@@ -156,6 +158,13 @@ This baseline also uses the production SGLang patch with
 `max_running_requests=96` and `cuda_graph_max_bs=96`; setting only the bridge
 variable does not raise SGLang's internal cap. `BUSY_BACKLOG_CHUNKS` only
 controls how much queued/running chunk work the API accepts before `429`.
+The bridge fixes each job's in-flight quota once it starts: at most two active
+jobs in the same lane get the burst quota of 20; later jobs keep the base quota
+of 10. The permit covers generation, post-processing, and the atomic file write,
+so a large SRT cannot accumulate an unbounded number of WAV buffers in memory.
+Set `MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB` equal to the base value to disable the
+burst. The test-server A/B report is in
+[`generated/canary-bridge-d4b0acc/benchmark-report.json`](generated/canary-bridge-d4b0acc/benchmark-report.json).
 See [`prod-current/PRODUCTION_MANIFEST.md`](prod-current/PRODUCTION_MANIFEST.md)
 for the exact commit, hashes, runtime scripts, and sanitized environment.
 
