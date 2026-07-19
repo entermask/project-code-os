@@ -1,0 +1,219 @@
+diff --git a/sglang_omni/models/higgs_tts/model_runner.py b/sglang_omni/models/higgs_tts/model_runner.py
+index fcdce2a..c9e5ab3 100644
+--- a/sglang_omni/models/higgs_tts/model_runner.py
++++ b/sglang_omni/models/higgs_tts/model_runner.py
+@@ -209,6 +209,44 @@ class HiggsTTSModelRunner(ModelRunner):
+             ]
+         return temps, top_ps, top_ks
+
++    @staticmethod
++    def _append_output_code(data: Any, codes_N: torch.Tensor) -> torch.Tensor:
++        try:
++            max_new_tokens = int(data.max_new_tokens)
++            num_codebooks = int(data.num_codebooks)
++            count = int(data.output_code_count)
++            buffer = data.output_code_buffer
++        except AttributeError:
++            codes_cpu = codes_N.detach().cpu().to(torch.long).clone()
++            data.output_codes.append(codes_cpu)
++            return codes_cpu
++
++        if buffer is None:
++            buffer = torch.empty(
++                (max(1, max_new_tokens), num_codebooks),
++                dtype=torch.long,
++                device="cpu",
++            )
++            data.output_code_buffer = buffer
++        elif count >= buffer.shape[0]:
++            new_cap = max(count + 1, buffer.shape[0] * 2)
++            new_buffer = torch.empty(
++                (new_cap, num_codebooks),
++                dtype=torch.long,
++                device="cpu",
++            )
++            new_buffer[:count].copy_(buffer[:count])
++            buffer = new_buffer
++            data.output_code_buffer = buffer
++
++        row = buffer[count]
++        if codes_N.device.type == "cpu" and codes_N.dtype == torch.long:
++            row.copy_(codes_N)
++        else:
++            row.copy_(codes_N.detach().to(device="cpu", dtype=torch.long))
++        data.output_code_count = count + 1
++        return row
++
+     def _collect_step_outputs_cg(
+         self, result: Any, forward_batch: Any, requests: list
+     ) -> None:
+@@ -299,8 +337,7 @@ class HiggsTTSModelRunner(ModelRunner):
+             if was_done_cpu[b]:
+                 cb0_per_row.append(0)
+                 continue
+-            codes_N = codes_BN_cpu[b].to(torch.long).clone()
+-            data.output_codes.append(codes_N)
++            codes_N = self._append_output_code(data, codes_BN_cpu[b])
+             data.generation_done = bool(gen_done_after_cpu[b])
+             self._emit_code_chunk(sched_req, codes_N)
+             self._mark_sampler_finished(req, data.generation_done)
+@@ -376,11 +413,11 @@ class HiggsTTSModelRunner(ModelRunner):
+                 cb0_per_row.append(0)
+                 continue
+             codes_N = codes_log[-1]
+-            data.output_codes.append(codes_N.detach().cpu().clone())
++            codes_cpu = self._append_output_code(data, codes_N)
+             data.generation_done = bool(model._sampler_pool.generation_done[row].item())
+-            self._emit_code_chunk(sched_req, data.output_codes[-1])
++            self._emit_code_chunk(sched_req, codes_cpu)
+             self._mark_sampler_finished(req, data.generation_done)
+-            cb0_per_row.append(int(codes_N[0].item()))
++            cb0_per_row.append(int(codes_cpu[0].item()))
+
+         result.next_token_ids = torch.tensor(
+             cb0_per_row,
+diff --git a/sglang_omni/models/higgs_tts/request_builders.py b/sglang_omni/models/higgs_tts/request_builders.py
+index f5b82dd..43d5da6 100644
+--- a/sglang_omni/models/higgs_tts/request_builders.py
++++ b/sglang_omni/models/higgs_tts/request_builders.py
+@@ -27,6 +27,8 @@ class HiggsSGLangRequestData(SGLangARRequestData):
+     num_codebooks: int = 8
+     codebook_size: int = 1026
+     output_codes: list[torch.Tensor] = field(default_factory=list)
++    output_code_buffer: torch.Tensor | None = None
++    output_code_count: int = 0
+     generation_done: bool = False
+     engine_start_s: float = 0.0
+     stream_metadata: dict[str, Any] | None = None
+@@ -146,7 +148,11 @@ def build_higgs_stream_metadata(
+
+
+ def apply_higgs_result(state: HiggsTtsState, data: HiggsSGLangRequestData) -> None:
+-    if data.output_codes:
++    if data.output_code_buffer is not None and data.output_code_count > 0:
++        codes = data.output_code_buffer[: data.output_code_count].to(torch.long)
++        state.output_codes_delayed = codes.tolist()
++        state.completion_tokens = int(codes.shape[0])
++    elif data.output_codes:
+         codes = torch.stack(data.output_codes, dim=0).to(torch.long)
+         state.output_codes_delayed = codes.tolist()
+         state.completion_tokens = int(codes.shape[0])
+diff --git a/tests/unit_test/higgs_tts/test_pipeline.py b/tests/unit_test/higgs_tts/test_pipeline.py
+index 787a1f3..efb2c0e 100644
+--- a/tests/unit_test/higgs_tts/test_pipeline.py
++++ b/tests/unit_test/higgs_tts/test_pipeline.py
+@@ -590,7 +590,15 @@ def test_higgs_model_runner_marks_sampler_finish_cg() -> None:
+         ),
+     )
+     req = SimpleNamespace(is_chunked=0, finished_reason=None, finished=lambda: False)
+-    data = SimpleNamespace(req=req, output_codes=[], generation_done=False)
++    data = SimpleNamespace(
++        req=req,
++        output_codes=[],
++        output_code_buffer=None,
++        output_code_count=0,
++        max_new_tokens=2,
++        num_codebooks=3,
++        generation_done=False,
++    )
+     result = SimpleNamespace(
+         logits_output=SimpleNamespace(next_token_logits=torch.zeros(1, 4))
+     )
+@@ -604,7 +612,9 @@ def test_higgs_model_runner_marks_sampler_finish_cg() -> None:
+
+     assert data.generation_done is True
+     assert req.finished_reason.to_json() == {"type": "stop", "matched": EOC_ID}
+-    assert len(data.output_codes) == 1
++    assert data.output_codes == []
++    assert data.output_code_count == 1
++    assert data.output_code_buffer[:1].tolist() == [[EOC_ID, 1, 2]]
+
+
+ def test_higgs_model_runner_collect_cg_mixed_batch() -> None:
+@@ -695,6 +705,48 @@ def test_higgs_model_runner_skips_already_finished_eager_request() -> None:
+     assert result.next_token_ids.tolist() == [0]
+
+
++def test_higgs_model_runner_eager_collect_reuses_preallocated_buffer() -> None:
++    runner = object.__new__(HiggsTTSModelRunner)
++    runner._outbox = None
++    runner._vocoder_target = "vocoder"
++    runner.model = SimpleNamespace(
++        _rid_to_row={"req": 0},
++        _output_codes={"req": []},
++        _sampler_pool=SimpleNamespace(generation_done=torch.tensor([False])),
++    )
++    req = SimpleNamespace(
++        is_chunked=0,
++        finished_reason=None,
++        finished=lambda: False,
++    )
++    data = SimpleNamespace(
++        req=req,
++        output_codes=[],
++        output_code_buffer=None,
++        output_code_count=0,
++        max_new_tokens=2,
++        num_codebooks=3,
++        generation_done=False,
++    )
++    result = SimpleNamespace(
++        logits_output=SimpleNamespace(next_token_logits=torch.zeros(1, 4))
++    )
++    sched_req = SimpleNamespace(request_id="req", data=data)
++
++    runner.model._output_codes["req"] = [torch.tensor([10, 11, 12])]
++    runner._collect_step_outputs(result, [sched_req])
++    buffer_ptr = data.output_code_buffer.data_ptr()
++
++    runner.model._output_codes["req"] = [torch.tensor([13, 14, 15])]
++    runner._collect_step_outputs(result, [sched_req])
++
++    assert data.output_codes == []
++    assert data.output_code_count == 2
++    assert data.output_code_buffer.data_ptr() == buffer_ptr
++    assert data.output_code_buffer[:2].tolist() == [[10, 11, 12], [13, 14, 15]]
++    assert result.next_token_ids.tolist() == [13]
++
++
+ def _make_payload(request_id: str, state: HiggsTtsState) -> StagePayload:
+     return StagePayload(
+         request_id=request_id,
+diff --git a/tests/unit_test/higgs_tts/test_request_builders.py b/tests/unit_test/higgs_tts/test_request_builders.py
+index 5b8ba96..5f6237b 100644
+--- a/tests/unit_test/higgs_tts/test_request_builders.py
++++ b/tests/unit_test/higgs_tts/test_request_builders.py
+@@ -44,3 +44,33 @@ def test_higgs_scheduler_adapters_clamp_cap_and_record_engine_time(
+     assert result.data["completion_tokens"] == 1
+     assert result.data["engine_time_s"] == 2.5
+     assert reset_calls == ["req-higgs"]
++
++
++def test_higgs_result_adapter_reads_output_code_buffer() -> None:
++    reset_calls: list[str] = []
++    _, result_adapter = request_builders.make_higgs_scheduler_adapters(
++        SimpleNamespace(reset_request=reset_calls.append),
++    )
++    state = HiggsTtsState(
++        prompt_token_ids=[1, 2, 3],
++        max_new_tokens=8,
++        num_codebooks=3,
++    )
++    payload = StagePayload(
++        request_id="req-higgs",
++        request=OmniRequest(inputs={}),
++        data=state.to_dict(),
++    )
++    data = request_builders.build_sglang_higgs_request(
++        state, request_id=payload.request_id
++    )
++    data.stage_payload = payload
++    data.output_codes.append(torch.tensor([9, 9, 9], dtype=torch.long))
++    data.output_code_buffer = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long)
++    data.output_code_count = 2
++
++    result = result_adapter(data)
++
++    assert result.data["output_codes_delayed"] == [[1, 2, 3], [4, 5, 6]]
++    assert result.data["completion_tokens"] == 2
++    assert reset_calls == ["req-higgs"]
