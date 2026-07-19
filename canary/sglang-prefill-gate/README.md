@@ -38,7 +38,7 @@ canary/sglang-prefill-gate/apply.sh \
 Do not patch either `sglang-omni-prod-sim` or the existing 1008a tree in place.
 The launcher reads the fixed, non-secret
 `/root/autodl-tmp/prod-sim/prefill-gate.env`; missing config defaults safely to
-K=0/T=60. The committed K0/K8/K16/K20 variants are exact benchmark inputs.
+K=0/T=60. The committed K0/K8/K12/K16/K20 variants are exact benchmark inputs.
 Only `higgs_sglang` may be restarted; the bridge/API PID must remain unchanged.
 
 ## Test and benchmark gates
@@ -47,7 +47,8 @@ Run the gate test plus the same 50-test CUDA/async suite used for 1008a. Then
 benchmark the exact task `7b66bc83-e5d5-48be-af5a-306a72d26bd4`, voice
 `fcxDguohxleZaemvsuHB`, 69 cues, with the same bridge cap96/base10/burst20.
 
-Use K0 on the patched source as control, then K8/K16/K20 at T=60 ms. Run one
+Use K0 on the patched source as control, then K8/K16/K20 at T=60 ms. If the
+coarse winner is bracketed, refine once at K12 before selection. Run one
 warmup plus at least ten measured runs per K. Compare makespan, chunks/s,
 generated-audio-seconds/s, completion-token/audio-duration distributions,
 queue wait and engine-completion p50/p95/p99, errors/retries/degraded/OOM,
