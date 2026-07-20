@@ -7,6 +7,11 @@ the production-shaped cap96/base10/burst20/two-burst-job configuration and the
 69-cue SRT workload below. K12 did not beat K16; K20 regressed because releases
 became more timer-dominated.
 
+This is only a K0-versus-K16 comparison inside the candidate stack. Its K0 arm
+already contains the new burst-20 bridge and the 1008a SGLang patch, so the
+percentages below are **not** uplift versus the actual production runtime. The
+production comparison protocol is tracked in `canary/prod-comparison/README.md`.
+
 This result changes only the supplied test server. Production was inspected
 read-only and was not restarted or modified.
 

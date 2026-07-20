@@ -23,9 +23,7 @@ HERE = Path(__file__).resolve().parent
 OUT = Path(os.environ["PREFILL_BENCH_OUT"])
 FIXTURE_DIR = Path("/root/autodl-tmp/fixture-task-7b66bc83")
 RUN_DIRECT = HERE / "run-direct.py"
-BASE_URL = "http://127.0.0.1:6006"
 ENV_FILE = Path("/root/autodl-tmp/Fish-Audio/.env")
-JOB_ROOT = Path("/root/autodl-tmp/tts-cache/jobs")
 POLL_SECONDS = float(os.environ.get("PREFILL_POLL_SECONDS", "0.05"))
 WARMUP_RUNS = int(os.environ.get("PREFILL_WARMUP_RUNS", "1"))
 MEASURED_RUNS = int(os.environ.get("PREFILL_MEASURED_RUNS", "10"))
@@ -33,10 +31,9 @@ PARALLEL_JOBS = int(os.environ.get("PREFILL_PARALLEL_JOBS", "1"))
 BENCH_LABEL = os.environ["PREFILL_BENCH_LABEL"]
 COALESCE_REQUESTS = int(os.environ["PREFILL_COALESCE_REQUESTS"])
 COALESCE_WAIT_MS = float(os.environ.get("PREFILL_COALESCE_WAIT_MS", "60"))
+BENCH_ARM = os.environ.get("PREFILL_BENCH_ARM", "candidate").strip()
 SGLANG_URL = "http://127.0.0.1:8000"
-API_LOG = Path("/root/autodl-tmp/logs/higgs_api.log")
 SGLANG_LOG = Path("/root/autodl-tmp/logs/higgs_sglang.log")
-BRIDGE_SOURCE = Path("/root/autodl-tmp/Fish-Audio/app.py")
 MAX_SUBMIT_SKEW_S = float(os.environ.get("PREFILL_MAX_SUBMIT_SKEW_S", "0.05"))
 DIRTY_SENTINEL = Path("/root/autodl-tmp/prod-sim/prefill-benchmark-dirty.json")
 RECOVERY_TIMEOUT_S = 1200.0
@@ -48,38 +45,258 @@ EXPECTED_FIXTURE_SHA256 = "217ec831dd9b934cb70b3ce95bbe95b7336c0a1a353df01d3e754
 EXPECTED_SRT_SHA256 = "3e3532076ce72ee843a1fa6d36726a0eac65b928c11a8e22aaf9a38d34bd4b18"
 EXPECTED_REFERENCE_SHA256 = "f5f702503b19eb0980467c8e9e395a7503a12f918bcf43cba1993fbe7fc08c80"
 EXPECTED_SGLANG_HEAD = "df62e91a00d383e6f73ab9604386ffac6c520529"
-EXPECTED_SGLANG_DIFF_SHA256 = "304eb276c6d3f19acbfa1bb32723f9c533b6d88be40a5f536cb83cf1ed9d097a"
-EXPECTED_SOURCE_ROOT = "/root/autodl-tmp/sglang-omni-prefill-gate-canary"
-EXPECTED_BRIDGE_APP_SHA256 = "00f37e06ac27d62f03d68686f1991d526db4884f7eec42b49398640885b44a37"
-EXPECTED_BRIDGE_CACHE_DIR = "/root/autodl-tmp/tts-cache"
-EXPECTED_SGLANG_STATUS_SHA256 = "abfbe6c8cdb655cfad3c9604dac169c3526bbd8b6b717f5cbd4337e3c12ac55c"
-EXPECTED_RUNTIME_FILE_SHA256 = {
-    "sglang_omni/scheduling/omni_scheduler.py": "ce0707c75ef193184b65af705192160ee25c694c13122bfd7e7733e5c026d6f3",
-    "sglang_omni/models/higgs_tts/stages.py": "d5b8ae1fe4b7a34baacd294779a8a9fa0711a58fe27bc25b725a67fa513a73b9",
-}
-EXPECTED_BRIDGE_HEALTH = {
-    "status": "ok",
-    "sglang_ready": True,
-    "sglang_base_url": "http://127.0.0.1:8000",
-    "max_concurrent_chunks": 96,
-    "short_reserved_chunks": 4,
-    "long_concurrent_chunks": 92,
-    "max_in_flight_chunks_per_job": 10,
-    "max_burst_in_flight_chunks_per_job": 20,
-    "max_burst_active_jobs": 2,
-    "busy_backlog_chunks": 2000,
+EXPECTED_MODEL_PATH = Path(
+    "/root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/"
+    "snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581"
+)
+EXPECTED_MODEL_PUBLIC_NAME = "bosonai/higgs-audio-v3-tts-4b"
+EXPECTED_MODEL_MANIFEST_SHA256 = "a06349c4ee441d5af92e01691108332ef9910db3532c335c97d10247a213c2e0"
+EXPECTED_MODEL_FILES = {
+    "model.safetensors": {
+        "link": "../../blobs/2f7965264c360b38180885006944aa16bd1de20f4e6cff79f6473bfcf8ae3d5a",
+        "bytes": 9_309_834_930,
+    },
+    "config.json": {
+        "link": "../../blobs/fb8848872136814c75ee10055d83ecc38f5f0169",
+        "bytes": 2_755,
+    },
+    "model.safetensors.index.json": {
+        "link": "../../blobs/6f55f418d83cc485a7f7f116b919df88c3148138",
+        "bytes": 90_103,
+    },
+    "tokenizer.json": {
+        "link": "../../blobs/eb883de2de5adc5113f1f02b54830a0ea7cd6ef191cde65c41aceb3737d4d1c1",
+        "bytes": 11_433_924,
+    },
+    "tokenizer_config.json": {
+        "link": "../../blobs/cfbe88c0bb630370fce5c497550b00a5b3608edc",
+        "bytes": 1_937,
+    },
+    "chat_template.jinja": {
+        "link": "../../blobs/28028c056af412405debd878cdda0171e35fa5d1",
+        "bytes": 2_427,
+    },
 }
 SUPPORTED_REF_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
+BRIDGE_ENV_KEYS = {
+    "BUSY_BACKLOG_CHUNKS",
+    "CHUNK_MIN_BYTES",
+    "CHUNK_RETRY_ATTEMPTS",
+    "CHUNK_RETRY_BASE_DELAY",
+    "CHUNK_SILENCE_MAX_DBFS",
+    "DOWNLOAD_TIMEOUT",
+    "EARLY_EOS_MIN_EXPECTED_TOKENS",
+    "EARLY_EOS_RATIO",
+    "FFMPEG_BIN",
+    "FFMPEG_POST_CONCURRENCY",
+    "FFMPEG_POST_NICE",
+    "FFMPEG_THREADS",
+    "HIGGS_DEFAULT_MAX_NEW_TOKENS",
+    "HIGGS_TEMPERATURE",
+    "HIGGS_TOP_K",
+    "HIGGS_TOP_P",
+    "HOST",
+    "JOB_CLEANUP_INTERVAL_SECONDS",
+    "JOB_TTL_SECONDS",
+    "KV_CACHE_CAPACITY",
+    "KV_INPUT_RESERVE",
+    "KV_SAFETY_MARGIN",
+    "LN_ANCHOR_WAIT_SEC",
+    "LN_OUTLIER_DB",
+    "LN_TP_OVER_DB",
+    "LOG_LEVEL",
+    "LOUDNORM_SHARED",
+    "MAX_BURST_ACTIVE_JOBS",
+    "MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB",
+    "MAX_CONCURRENT_CHUNKS",
+    "MAX_IN_FLIGHT_CHUNKS_PER_JOB",
+    "MAX_NEW_TOKENS_BASE",
+    "MAX_NEW_TOKENS_CEIL",
+    "MAX_NEW_TOKENS_FLOOR",
+    "MAX_NEW_TOKENS_SAFETY",
+    "MODEL_PATH",
+    "MT_CONTEXT_TAIL_SEC",
+    "PORT",
+    "REQUEST_TIMEOUT",
+    "SGLANG_BASE_URL",
+    "SHORT_LOUDNORM_SEC",
+    "SHORT_REQUEST_MAX_CHARS",
+    "SHORT_REQUEST_MAX_CHUNKS",
+    "SHORT_RESERVED_CHUNKS",
+    "SPEECH_MODEL",
+    "STREAMED_JOB_TTL_SECONDS",
+    "STREAM_CHUNK_SIZE_BYTES",
+    "SUBSPLIT_ENABLE",
+    "SUBSPLIT_MAX_PARTS",
+    "SUBSPLIT_TARGET_RATIO",
+    "TOK_PER_CHAR_ARABIC",
+    "TOK_PER_CHAR_DENSE",
+    "TOK_PER_CHAR_DEVANAGARI",
+    "TOK_PER_CHAR_HAN",
+    "TOK_PER_CHAR_HANGUL",
+    "TOK_PER_CHAR_KANA",
+    "TOK_PER_CHAR_LATIN",
+    "TOK_PER_CHAR_THAI",
+    "TTS_BACKEND_NAME",
+    "TTS_CACHE_DIR",
+}
+
+if BENCH_ARM == "candidate":
+    BASE_URL = "http://127.0.0.1:6006"
+    API_PORT = 6006
+    API_HOST = "0.0.0.0"
+    API_LOG = Path("/root/autodl-tmp/logs/higgs_api.log")
+    BRIDGE_SOURCE = Path("/root/autodl-tmp/Fish-Audio/app.py")
+    EXPECTED_BRIDGE_CACHE_DIR = "/root/autodl-tmp/tts-cache"
+    EXPECTED_BRIDGE_APP_SHA256 = "00f37e06ac27d62f03d68686f1991d526db4884f7eec42b49398640885b44a37"
+    EXPECTED_SOURCE_ROOT = "/root/autodl-tmp/sglang-omni-prefill-gate-canary"
+    EXPECTED_SGLANG_DIFF_SHA256 = "304eb276c6d3f19acbfa1bb32723f9c533b6d88be40a5f536cb83cf1ed9d097a"
+    EXPECTED_SGLANG_STATUS_SHA256 = "abfbe6c8cdb655cfad3c9604dac169c3526bbd8b6b717f5cbd4337e3c12ac55c"
+    EXPECTED_RUNTIME_FILE_SHA256 = {
+        "sglang_omni/scheduling/omni_scheduler.py": "ce0707c75ef193184b65af705192160ee25c694c13122bfd7e7733e5c026d6f3",
+        "sglang_omni/models/higgs_tts/stages.py": "d5b8ae1fe4b7a34baacd294779a8a9fa0711a58fe27bc25b725a67fa513a73b9",
+    }
+    EXPECTED_BRIDGE_HEALTH = {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": True,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60,
+    }
+    EXPECTED_IN_FLIGHT_LIMIT = 20
+    EXPECTED_GATE_CLI = True
+    EXPECTED_BRIDGE_ENV: dict[str, str | None] = dict.fromkeys(BRIDGE_ENV_KEYS)
+    EXPECTED_BRIDGE_ENV.update({
+        "BUSY_BACKLOG_CHUNKS": "2000",
+        "CHUNK_MIN_BYTES": "512",
+        "CHUNK_RETRY_ATTEMPTS": "3",
+        "CHUNK_RETRY_BASE_DELAY": "1.0",
+        "DOWNLOAD_TIMEOUT": "60",
+        "EARLY_EOS_MIN_EXPECTED_TOKENS": "96",
+        "EARLY_EOS_RATIO": "0.5",
+        "FFMPEG_BIN": "ffmpeg",
+        "HIGGS_TEMPERATURE": "0.8",
+        "HIGGS_TOP_K": "50",
+        "HIGGS_TOP_P": "",
+        "HOST": "0.0.0.0",
+        "JOB_CLEANUP_INTERVAL_SECONDS": "30",
+        "JOB_TTL_SECONDS": "3600",
+        "LN_ANCHOR_WAIT_SEC": "120",
+        "LN_OUTLIER_DB": "6",
+        "LN_TP_OVER_DB": "6",
+        "LOG_LEVEL": "INFO",
+        "LOUDNORM_SHARED": "on",
+        "MAX_BURST_ACTIVE_JOBS": "2",
+        "MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB": "20",
+        "MAX_CONCURRENT_CHUNKS": "96",
+        "MAX_IN_FLIGHT_CHUNKS_PER_JOB": "10",
+        "MODEL_PATH": "bosonai/higgs-audio-v3-tts-4b",
+        "PORT": "6006",
+        "REQUEST_TIMEOUT": "600",
+        "SGLANG_BASE_URL": "http://127.0.0.1:8000",
+        "SHORT_REQUEST_MAX_CHARS": "1000",
+        "SHORT_REQUEST_MAX_CHUNKS": "4",
+        "SHORT_RESERVED_CHUNKS": "4",
+        "SPEECH_MODEL": "",
+        "STREAMED_JOB_TTL_SECONDS": "60",
+        "STREAM_CHUNK_SIZE_BYTES": "4194304",
+        "SUBSPLIT_ENABLE": "1",
+        "SUBSPLIT_MAX_PARTS": "8",
+        "SUBSPLIT_TARGET_RATIO": "0.7",
+        "TOK_PER_CHAR_ARABIC": "3.0",
+        "TOK_PER_CHAR_DEVANAGARI": "2.4",
+        "TOK_PER_CHAR_HAN": "6.0",
+        "TOK_PER_CHAR_HANGUL": "3.8",
+        "TOK_PER_CHAR_KANA": "4.8",
+        "TOK_PER_CHAR_LATIN": "2.0",
+        "TOK_PER_CHAR_THAI": "2.5",
+        "TTS_BACKEND_NAME": "bosonai/higgs-audio-v3-tts-4b",
+        "TTS_CACHE_DIR": "/root/autodl-tmp/tts-cache",
+    })
+elif BENCH_ARM == "prod-clone":
+    BASE_URL = "http://127.0.0.1:6007"
+    API_PORT = 6007
+    API_HOST = "127.0.0.1"
+    API_LOG = Path("/root/autodl-tmp/prod-compare/logs/prod_clone_api.log")
+    BRIDGE_SOURCE = Path("/root/autodl-tmp/Fish-Audio/prod-current/app.py")
+    EXPECTED_BRIDGE_CACHE_DIR = "/root/autodl-tmp/tts-cache/prod-compare"
+    EXPECTED_BRIDGE_APP_SHA256 = "328851b1d77dacf921963376fe15c16255335e68fca75863b981fb11d45cf033"
+    EXPECTED_SOURCE_ROOT = "/root/autodl-tmp/sglang-omni-prod-sim"
+    EXPECTED_SGLANG_DIFF_SHA256 = "9a3ba2d6f6b8459e631b488b76eb5a9a96432ed32edc5dcab770789dd4ef6ad4"
+    EXPECTED_SGLANG_STATUS_SHA256 = "426a175a8fbe005d450e253f8ff0a4769d30b090a0860532c3cf301896740584"
+    EXPECTED_RUNTIME_FILE_SHA256 = {
+        "sglang_omni/scheduling/omni_scheduler.py": "fecf292edd21b72c5ad53649e42e5fd9fa935a465fe0b2bea4d3b9789ecf1695",
+        "sglang_omni/models/higgs_tts/stages.py": "20a0bbbc9d328f42262f5040d0c52509b2ceef25bffcdff7a4caa3c650da6e3f",
+    }
+    EXPECTED_BRIDGE_HEALTH = {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": True,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "max_in_flight_chunks_per_job": 10,
+        "busy_backlog_chunks": 2000,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60,
+    }
+    EXPECTED_IN_FLIGHT_LIMIT = 0
+    EXPECTED_GATE_CLI = False
+    EXPECTED_BRIDGE_ENV = dict.fromkeys(BRIDGE_ENV_KEYS)
+    EXPECTED_BRIDGE_ENV.update({
+        "BUSY_BACKLOG_CHUNKS": "2000",
+        "CHUNK_MIN_BYTES": "512",
+        "CHUNK_RETRY_ATTEMPTS": "3",
+        "CHUNK_RETRY_BASE_DELAY": "1.0",
+        "DOWNLOAD_TIMEOUT": "60",
+        "FFMPEG_BIN": "ffmpeg",
+        "HOST": "0.0.0.0",
+        "JOB_CLEANUP_INTERVAL_SECONDS": "30",
+        "JOB_TTL_SECONDS": "3600",
+        "LOG_LEVEL": "INFO",
+        "MAX_CONCURRENT_CHUNKS": "96",
+        "MAX_IN_FLIGHT_CHUNKS_PER_JOB": "10",
+        "MODEL_PATH": "bosonai/higgs-audio-v3-tts-4b",
+        "PORT": "6006",
+        "REQUEST_TIMEOUT": "600",
+        "SGLANG_BASE_URL": "http://127.0.0.1:8000",
+        "SHORT_REQUEST_MAX_CHARS": "1000",
+        "SHORT_REQUEST_MAX_CHUNKS": "4",
+        "SHORT_RESERVED_CHUNKS": "4",
+        "SPEECH_MODEL": "",
+        "STREAMED_JOB_TTL_SECONDS": "60",
+        "STREAM_CHUNK_SIZE_BYTES": "4194304",
+        "TTS_BACKEND_NAME": "bosonai/higgs-audio-v3-tts-4b",
+        "TTS_CACHE_DIR": "/root/autodl-tmp/tts-cache/prod-compare",
+    })
+else:
+    raise ValueError(f"Unsupported PREFILL_BENCH_ARM: {BENCH_ARM!r}")
+
+JOB_ROOT = Path(EXPECTED_BRIDGE_CACHE_DIR) / "jobs"
 
 if (
     WARMUP_RUNS < 1
     or MEASURED_RUNS < 1
     or PARALLEL_JOBS not in {1, 2}
     or MAX_SUBMIT_SKEW_S <= 0
+    or (not EXPECTED_GATE_CLI and COALESCE_REQUESTS != 0)
 ):
     raise ValueError(
         "warmup/measured runs must be >= 1, parallel jobs must be 1 or 2, "
-        "and max submit skew must be positive"
+        "max submit skew must be positive, and prod-clone must declare K=0"
     )
 
 
@@ -140,7 +357,11 @@ def file_sha256(path: Path) -> str:
 
 def find_api_pid() -> int:
     output = subprocess.check_output(
-        ["pgrep", "-f", "/uvicorn app:app --host 0.0.0.0 --port 6006"],
+        [
+            "pgrep",
+            "-f",
+            f"/uvicorn app:app --host {API_HOST} --port {API_PORT}",
+        ],
         text=True,
     )
     pids = [int(line) for line in output.splitlines() if line.strip()]
@@ -178,8 +399,48 @@ def process_start_unix(pid: int) -> float:
     return boot_time + start_ticks / os.sysconf("SC_CLK_TCK")
 
 
+def model_snapshot() -> dict[str, Any]:
+    files: dict[str, dict[str, Any]] = {}
+    for name, expected in EXPECTED_MODEL_FILES.items():
+        path = EXPECTED_MODEL_PATH / name
+        if not path.is_symlink():
+            raise RuntimeError(f"Pinned model file is not a symlink: {path}")
+        link = os.readlink(path)
+        size = path.stat().st_size
+        if link != expected["link"] or size != expected["bytes"]:
+            raise RuntimeError(
+                f"Pinned model manifest mismatch for {name}: "
+                f"link={link!r} bytes={size} expected={expected}"
+            )
+        files[name] = {"link": link, "bytes": size}
+    manifest = "".join(
+        f"{path.relative_to(EXPECTED_MODEL_PATH)}\t{os.readlink(path)}\n"
+        for path in sorted(EXPECTED_MODEL_PATH.rglob("*"))
+        if path.is_symlink()
+    )
+    manifest_sha256 = hashlib.sha256(manifest.encode("utf-8")).hexdigest()
+    if manifest_sha256 != EXPECTED_MODEL_MANIFEST_SHA256:
+        raise RuntimeError(
+            f"Pinned model symlink manifest mismatch: {manifest_sha256}"
+        )
+    return {
+        "path": str(EXPECTED_MODEL_PATH),
+        "snapshot_revision": EXPECTED_MODEL_PATH.name,
+        "public_name": EXPECTED_MODEL_PUBLIC_NAME,
+        "symlink_manifest_sha256": manifest_sha256,
+        "files": files,
+    }
+
+
 def bridge_runtime_snapshot(pid: int) -> dict[str, Any]:
     environ = process_environ(pid)
+    env_mismatches = {
+        key: {"actual": environ.get(key), "expected": expected}
+        for key, expected in EXPECTED_BRIDGE_ENV.items()
+        if environ.get(key) != expected
+    }
+    if env_mismatches:
+        raise RuntimeError(f"Unexpected bridge environment: {env_mismatches}")
     cache_dir = environ.get("TTS_CACHE_DIR")
     if cache_dir != EXPECTED_BRIDGE_CACHE_DIR:
         raise RuntimeError(f"Unexpected bridge TTS_CACHE_DIR: {cache_dir!r}")
@@ -188,6 +449,17 @@ def bridge_runtime_snapshot(pid: int) -> dict[str, Any]:
         for value in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         if value
     ]
+    expected_cmdline = [
+        "/root/autodl-tmp/Fish-Audio/.venv/bin/python3",
+        "/root/autodl-tmp/Fish-Audio/.venv/bin/uvicorn",
+        "app:app",
+        "--host",
+        API_HOST,
+        "--port",
+        str(API_PORT),
+    ]
+    if cmdline != expected_cmdline:
+        raise RuntimeError(f"Unexpected bridge command line: {cmdline}")
     cwd = os.readlink(f"/proc/{pid}/cwd")
     if Path(cwd) != BRIDGE_SOURCE.parent:
         raise RuntimeError(
@@ -208,6 +480,9 @@ def bridge_runtime_snapshot(pid: int) -> dict[str, Any]:
         ).hexdigest(),
         "cwd": cwd,
         "tts_cache_dir": cache_dir,
+        "verified_environment": {
+            key: environ.get(key) for key in EXPECTED_BRIDGE_ENV
+        },
         "process_started_unix": started_unix,
         "source_mtime_unix": source_mtime_unix,
     }
@@ -422,23 +697,47 @@ def active_sglang_snapshot() -> dict[str, Any]:
             raise RuntimeError(f"Invalid or duplicate SGLang option {name}: {cmdline}")
         options[name] = value
     expected_options = {
-        "--model-path": "bosonai/higgs-audio-v3-tts-4b",
+        "--model-path": str(EXPECTED_MODEL_PATH),
+        "--model-name": EXPECTED_MODEL_PUBLIC_NAME,
         "--host": "127.0.0.1",
         "--port": "8000",
         "--allowed-local-media-path": "/root/autodl-tmp/tts-cache",
         "--stages.2.factory_args.server_args_overrides.attention_backend": "triton",
-        "--stages.2.factory_args.prefill_coalesce_requests": str(COALESCE_REQUESTS),
-        "--stages.2.factory_args.prefill_coalesce_wait_ms": f"{COALESCE_WAIT_MS:g}",
     }
+    if EXPECTED_GATE_CLI:
+        expected_options.update(
+            {
+                "--stages.2.factory_args.prefill_coalesce_requests": str(COALESCE_REQUESTS),
+                "--stages.2.factory_args.prefill_coalesce_wait_ms": f"{COALESCE_WAIT_MS:g}",
+            }
+        )
     if options != expected_options:
         raise RuntimeError(
-            f"Active SGLang CLI is not the exact prod-sim canary config: {options}"
+            f"Active SGLang CLI is not the exact {BENCH_ARM} config: {options}"
         )
-    active_k = int(options["--stages.2.factory_args.prefill_coalesce_requests"])
-    active_wait_ms = float(
-        options["--stages.2.factory_args.prefill_coalesce_wait_ms"]
+    active_k = (
+        int(options["--stages.2.factory_args.prefill_coalesce_requests"])
+        if EXPECTED_GATE_CLI
+        else None
+    )
+    active_wait_ms = (
+        float(options["--stages.2.factory_args.prefill_coalesce_wait_ms"])
+        if EXPECTED_GATE_CLI
+        else None
     )
     source_root = environ.get("PYTHONPATH", "").split(":", 1)[0]
+    expected_model_env = {
+        "MODEL_PATH": str(EXPECTED_MODEL_PATH),
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+    }
+    model_env_mismatches = {
+        key: {"actual": environ.get(key), "expected": expected}
+        for key, expected in expected_model_env.items()
+        if environ.get(key) != expected
+    }
+    if model_env_mismatches:
+        raise RuntimeError(f"Unexpected active model environment: {model_env_mismatches}")
     head = subprocess.check_output(
         ["git", "-C", source_root, "rev-parse", "HEAD"], text=True
     ).strip()
@@ -502,10 +801,16 @@ def active_sglang_snapshot() -> dict[str, Any]:
         "status_sha256": status_sha256,
         "process_started_unix": process_started_unix,
         "runtime_files": runtime_files,
+        "model": model_snapshot(),
+        "model_environment": expected_model_env,
+        "benchmark_arm": BENCH_ARM,
+        "prefill_gate_cli_present": EXPECTED_GATE_CLI,
         "coalesce_requests": active_k,
         "coalesce_wait_ms": active_wait_ms,
     }
-    if active_k != COALESCE_REQUESTS or active_wait_ms != COALESCE_WAIT_MS:
+    if EXPECTED_GATE_CLI and (
+        active_k != COALESCE_REQUESTS or active_wait_ms != COALESCE_WAIT_MS
+    ):
         raise RuntimeError(
             "Benchmark K/T does not match active SGLang: "
             f"benchmark={COALESCE_REQUESTS}/{COALESCE_WAIT_MS}, "
@@ -1035,7 +1340,7 @@ def validate_jobs(jobs: list[dict[str, Any]], require_cache_hit: bool) -> None:
             "chunks_completed": EXPECTED_CUE_COUNT,
             "chunks_failed": 0,
             "chunks_degraded": 0,
-            "in_flight_limit": 20,
+            "in_flight_limit": EXPECTED_IN_FLIGHT_LIMIT,
             "completion_trace_files": EXPECTED_CUE_COUNT,
         }
         for key, value in expected.items():
@@ -1268,10 +1573,12 @@ def main() -> None:
 
     report = {
         "label": BENCH_LABEL,
-        "role": "prefill-admission-canary",
+        "role": "prod-comparison",
+        "benchmark_arm": BENCH_ARM,
         "prefill_gate": {
-            "requests": COALESCE_REQUESTS,
-            "wait_ms": COALESCE_WAIT_MS,
+            "cli_present": EXPECTED_GATE_CLI,
+            "requests": COALESCE_REQUESTS if EXPECTED_GATE_CLI else None,
+            "wait_ms": COALESCE_WAIT_MS if EXPECTED_GATE_CLI else None,
         },
         "fixture": {
             "task_id": fixture["task"]["id"],
