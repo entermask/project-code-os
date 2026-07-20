@@ -1,0 +1,3295 @@
+{
+  "label": "candidate-single-10-0f0a696",
+  "role": "prod-comparison",
+  "benchmark_arm": "candidate",
+  "prefill_gate": {
+    "cli_present": true,
+    "requests": 16,
+    "wait_ms": 60.0
+  },
+  "fixture": {
+    "task_id": "7b66bc83-e5d5-48be-af5a-306a72d26bd4",
+    "voice_id": "fcxDguohxleZaemvsuHB",
+    "fixture_manifest_sha256": "217ec831dd9b934cb70b3ce95bbe95b7336c0a1a353df01d3e754fd64025d051",
+    "reference_url_sha256": "f5f702503b19eb0980467c8e9e395a7503a12f918bcf43cba1993fbe7fc08c80",
+    "runner_sha256": "5d00ef1fa2b388b5c7cebc5edf5ba5bad01a6173048e16c28162737be414f8fc",
+    "benchmark_sha256": "9bd0b903fd788dffe108b54480faf95e4f4b557ccf6f99aeb296259427af687f",
+    "reference_audio_sha256": "f5f702503b19eb0980467c8e9e395a7503a12f918bcf43cba1993fbe7fc08c80",
+    "srt_sha256": "3e3532076ce72ee843a1fa6d36726a0eac65b928c11a8e22aaf9a38d34bd4b18",
+    "batch_size": 69,
+    "format": "wav",
+    "num_step": 16,
+    "seed_sent": false,
+    "poll_interval_s": 0.05,
+    "warmup_runs": 1,
+    "measured_runs": 10,
+    "parallel_jobs": 1,
+    "max_submit_skew_s": 0.05
+  },
+  "distribution_measured": {
+    "job_makespan_s": {
+      "n": 10,
+      "min": 2.548682689666748,
+      "mean": 2.6221357583999634,
+      "p50": 2.6176350116729736,
+      "p95": 2.6822364211082457,
+      "p99": 2.689392039775848,
+      "max": 2.691180944442749
+    },
+    "runner_wall_s": {
+      "n": 10,
+      "min": 2.6210499750450253,
+      "mean": 2.6997883827891203,
+      "p50": 2.713707953458652,
+      "p95": 2.760104771098122,
+      "p99": 2.766074371589348,
+      "max": 2.767566771712154
+    },
+    "chunks_per_s": {
+      "n": 10,
+      "min": 25.63930163911276,
+      "mean": 26.321571823189988,
+      "p50": 26.359835560038455,
+      "p95": 26.948849905670162,
+      "p99": 27.048017288184113,
+      "max": 27.0728091338126
+    },
+    "audio_s_per_s": {
+      "n": 10,
+      "min": 48.3059917877679,
+      "mean": 49.54710102939008,
+      "p50": 49.69891820851076,
+      "p95": 50.630161016015016,
+      "p99": 50.6928710722342,
+      "max": 50.70854858628899
+    },
+    "completion_tokens": {
+      "n": 10,
+      "min": 3709.0,
+      "mean": 3730.1,
+      "p50": 3730.0,
+      "p95": 3751.65,
+      "p99": 3752.73,
+      "max": 3753.0
+    },
+    "audio_duration_s": {
+      "n": 10,
+      "min": 129.04,
+      "mean": 129.88400000000001,
+      "p50": 129.88,
+      "p95": 130.746,
+      "p99": 130.78920000000002,
+      "max": 130.8
+    },
+    "engine_time_s": {
+      "n": 10,
+      "min": 40.426809,
+      "mean": 41.3038426,
+      "p50": 41.159529,
+      "p95": 42.48925645,
+      "p99": 42.999484089999996,
+      "max": 43.127041
+    }
+  },
+  "completion_offsets_measured": {
+    "per_run_p50_s": {
+      "n": 10,
+      "min": 1.3916640281677246,
+      "mean": 1.4356185674667359,
+      "p50": 1.4312459230422974,
+      "p95": 1.4900405406951904,
+      "p99": 1.508422040939331,
+      "max": 1.5130174160003662
+    },
+    "per_run_p95_s": {
+      "n": 10,
+      "min": 2.4204923629760735,
+      "mean": 2.486719017028808,
+      "p50": 2.469318795204162,
+      "p95": 2.567788202762603,
+      "p99": 2.5758463826179496,
+      "max": 2.5778609275817863
+    }
+  },
+  "wave_distribution_measured": {
+    "client_wall_s": {
+      "n": 10,
+      "min": 2.622150602284819,
+      "mean": 2.702080150973052,
+      "p50": 2.715198336634785,
+      "p95": 2.7650824698153884,
+      "p99": 2.768579712631181,
+      "max": 2.769454023335129
+    },
+    "client_submit_skew_s": {
+      "n": 10,
+      "min": 0.0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "server_create_skew_s": {
+      "n": 10,
+      "min": 0.0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "service_makespan_s": {
+      "n": 10,
+      "min": 2.548682689666748,
+      "mean": 2.6221357583999634,
+      "p50": 2.6176350116729736,
+      "p95": 2.6822364211082457,
+      "p99": 2.689392039775848,
+      "max": 2.691180944442749
+    },
+    "job_makespan_spread_s": {
+      "n": 10,
+      "min": 0.0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "service_chunks_per_s": {
+      "n": 10,
+      "min": 25.63930163911276,
+      "mean": 26.321571823189988,
+      "p50": 26.359835560038455,
+      "p95": 26.948849905670162,
+      "p99": 27.048017288184113,
+      "max": 27.0728091338126
+    },
+    "service_audio_s_per_s": {
+      "n": 10,
+      "min": 48.3059917877679,
+      "mean": 49.54710102939008,
+      "p50": 49.69891820851076,
+      "p95": 50.630161016015016,
+      "p99": 50.6928710722342,
+      "max": 50.70854858628899
+    }
+  },
+  "counts_measured": {
+    "waves": 10,
+    "jobs": 10,
+    "succeeded": 10,
+    "failed_runs": 0,
+    "chunks": 690,
+    "chunks_failed": 0,
+    "chunks_degraded": 0,
+    "poll_errors": 0
+  },
+  "warmup_waves": [
+    {
+      "label": "warmup-01",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528200.9451559,
+      "runner_finished_unix": 1784528206.14926,
+      "client_wall_s": 5.204101986717433,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 0,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528200.9478228,
+      "service_finished_unix": 1784528206.07248,
+      "service_makespan_s": 5.124657154083252,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 13.46431535327623,
+      "audio_duration_s": 129.64,
+      "service_audio_s_per_s": 25.297302063749715,
+      "jobs": [
+        {
+          "label": "warmup-01-job-01",
+          "request_id": "438e0a50-cb2c-4fd4-b4a9-4b6bf8662dde",
+          "runner_started_unix": 1784528200.946401,
+          "client_submit_started_unix": 1784528200.9464011,
+          "server_created_unix": 1784528200.9472756,
+          "response_received_unix": 1784528200.9480655,
+          "runner_finished_unix": 1784528206.1482522,
+          "runner_wall_s": 5.201853642240167,
+          "job_started_unix": 1784528200.9478228,
+          "job_updated_unix": 1784528206.07248,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 5.124657154083252,
+          "chunks_per_s": 13.46431535327623,
+          "audio_duration_s": 129.64,
+          "audio_s_per_s": 25.297302063749715,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3724,
+          "total_tokens": 16180,
+          "engine_time_s": 41.797524,
+          "poll_count": 100,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 2.718782663345337,
+            "mean": 3.9922480963278506,
+            "p50": 4.050860166549683,
+            "p95": 4.956512784957885,
+            "p99": 5.120202293395996,
+            "max": 5.122922420501709
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "438e0a50-cb2c-4fd4-b4a9-4b6bf8662dde",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3724",
+            "x-total-tokens": "16180",
+            "x-engine-time": "41.797524"
+          }
+        }
+      ]
+    }
+  ],
+  "measured_waves": [
+    {
+      "label": "run-01",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528206.1564221,
+      "runner_finished_unix": 1784528208.8849943,
+      "client_wall_s": 2.7285697762854397,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 1,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528206.1613262,
+      "service_finished_unix": 1784528208.8202653,
+      "service_makespan_s": 2.6589391231536865,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 25.950199235160078,
+      "audio_duration_s": 130.08,
+      "service_audio_s_per_s": 48.921766905936565,
+      "jobs": [
+        {
+          "label": "run-01-job-01",
+          "request_id": "cefd76ca-ef7f-40ed-9af6-2d0e80d5d4f5",
+          "runner_started_unix": 1784528206.1569967,
+          "client_submit_started_unix": 1784528206.1569972,
+          "server_created_unix": 1784528206.1597416,
+          "response_received_unix": 1784528206.161439,
+          "runner_finished_unix": 1784528208.884059,
+          "runner_wall_s": 2.7270647739060223,
+          "job_started_unix": 1784528206.1613262,
+          "job_updated_unix": 1784528208.8202653,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.6589391231536865,
+          "chunks_per_s": 25.950199235160078,
+          "audio_duration_s": 130.08,
+          "audio_s_per_s": 48.921766905936565,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3735,
+          "total_tokens": 16191,
+          "engine_time_s": 41.656648,
+          "poll_count": 52,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.4214487075805664,
+            "mean": 1.497511248657669,
+            "p50": 1.4615092277526855,
+            "p95": 2.5335713863372797,
+            "p99": 2.6508581542968748,
+            "max": 2.653578281402588
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "cefd76ca-ef7f-40ed-9af6-2d0e80d5d4f5",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3735",
+            "x-total-tokens": "16191",
+            "x-engine-time": "41.656648"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-02",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528208.8891528,
+      "runner_finished_unix": 1784528211.6248424,
+      "client_wall_s": 2.7356881480664015,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 2,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528208.8913255,
+      "service_finished_unix": 1784528211.5154834,
+      "service_makespan_s": 2.6241579055786133,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 26.29414939295959,
+      "audio_duration_s": 130.8,
+      "service_audio_s_per_s": 49.84456145795818,
+      "jobs": [
+        {
+          "label": "run-02-job-01",
+          "request_id": "6258be75-a704-4779-a75a-476b388435d2",
+          "runner_started_unix": 1784528208.8895905,
+          "client_submit_started_unix": 1784528208.889591,
+          "server_created_unix": 1784528208.8907044,
+          "response_received_unix": 1784528208.8915367,
+          "runner_finished_unix": 1784528211.6230035,
+          "runner_wall_s": 2.733415314927697,
+          "job_started_unix": 1784528208.8913255,
+          "job_updated_unix": 1784528211.5154834,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.6241579055786133,
+          "chunks_per_s": 26.29414939295959,
+          "audio_duration_s": 130.8,
+          "audio_s_per_s": 49.84456145795818,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3753,
+          "total_tokens": 16209,
+          "engine_time_s": 41.17807,
+          "poll_count": 52,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.39960646629333496,
+            "mean": 1.4688858433046204,
+            "p50": 1.3916640281677246,
+            "p95": 2.4405247211456293,
+            "p99": 2.617014875411987,
+            "max": 2.6197350025177
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "6258be75-a704-4779-a75a-476b388435d2",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3753",
+            "x-total-tokens": "16209",
+            "x-engine-time": "41.178070"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-03",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528211.628858,
+      "runner_finished_unix": 1784528214.288644,
+      "client_wall_s": 2.6597843319177628,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 3,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528211.6307704,
+      "service_finished_unix": 1784528214.2186797,
+      "service_makespan_s": 2.58790922164917,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 26.662449912377177,
+      "audio_duration_s": 130.68,
+      "service_audio_s_per_s": 50.496361660136955,
+      "jobs": [
+        {
+          "label": "run-03-job-01",
+          "request_id": "6bcb56cd-82c7-4130-b564-a7f6cd096edd",
+          "runner_started_unix": 1784528211.6291082,
+          "client_submit_started_unix": 1784528211.6291084,
+          "server_created_unix": 1784528211.629985,
+          "response_received_unix": 1784528211.6309247,
+          "runner_finished_unix": 1784528214.2872806,
+          "runner_wall_s": 2.658173873089254,
+          "job_started_unix": 1784528211.6307704,
+          "job_updated_unix": 1784528214.2186797,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.58790922164917,
+          "chunks_per_s": 26.662449912377177,
+          "audio_duration_s": 130.68,
+          "audio_s_per_s": 50.496361660136955,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3750,
+          "total_tokens": 16206,
+          "engine_time_s": 41.140988,
+          "poll_count": 51,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.37631869316101074,
+            "mean": 1.4632801767708599,
+            "p50": 1.3923776149749756,
+            "p95": 2.4772402286529536,
+            "p99": 2.5777261161804197,
+            "max": 2.580446243286133
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "6bcb56cd-82c7-4130-b564-a7f6cd096edd",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3750",
+            "x-total-tokens": "16206",
+            "x-engine-time": "41.140988"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-04",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528214.2928512,
+      "runner_finished_unix": 1784528216.9946802,
+      "client_wall_s": 2.70182689698413,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 4,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528214.2947178,
+      "service_finished_unix": 1784528216.8695998,
+      "service_makespan_s": 2.5748820304870605,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 26.797344182384958,
+      "audio_duration_s": 130.12,
+      "service_audio_s_per_s": 50.534353985680156,
+      "jobs": [
+        {
+          "label": "run-04-job-01",
+          "request_id": "b041c20e-1b10-496b-adff-b3dfbbf0157f",
+          "runner_started_unix": 1784528214.2931201,
+          "client_submit_started_unix": 1784528214.2931201,
+          "server_created_unix": 1784528214.2938998,
+          "response_received_unix": 1784528214.2948477,
+          "runner_finished_unix": 1784528216.9934697,
+          "runner_wall_s": 2.7003511330112815,
+          "job_started_unix": 1784528214.2947178,
+          "job_updated_unix": 1784528216.8695998,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.5748820304870605,
+          "chunks_per_s": 26.797344182384958,
+          "audio_duration_s": 130.12,
+          "audio_s_per_s": 50.534353985680156,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3736,
+          "total_tokens": 16192,
+          "engine_time_s": 40.426809,
+          "poll_count": 50,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.4285283088684082,
+            "mean": 1.4785599915877632,
+            "p50": 1.4285860061645508,
+            "p95": 2.456645393371581,
+            "p99": 2.5659317874908445,
+            "max": 2.5686519145965576
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "b041c20e-1b10-496b-adff-b3dfbbf0157f",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3736",
+            "x-total-tokens": "16192",
+            "x-engine-time": "40.426809"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-05",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528216.9994307,
+      "runner_finished_unix": 1784528219.6504226,
+      "client_wall_s": 2.650990248657763,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 5,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528217.0015545,
+      "service_finished_unix": 1784528219.6126666,
+      "service_makespan_s": 2.611112117767334,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 26.425521727117317,
+      "audio_duration_s": 129.68,
+      "service_audio_s_per_s": 49.66466170395035,
+      "jobs": [
+        {
+          "label": "run-05-job-01",
+          "request_id": "4c5d2b7e-4f9c-4f5f-b6d7-8dfebf140189",
+          "runner_started_unix": 1784528216.9998825,
+          "client_submit_started_unix": 1784528216.9998825,
+          "server_created_unix": 1784528217.0009072,
+          "response_received_unix": 1784528217.0017045,
+          "runner_finished_unix": 1784528219.6493063,
+          "runner_wall_s": 2.649425328243524,
+          "job_started_unix": 1784528217.0015545,
+          "job_updated_unix": 1784528219.6126666,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.611112117767334,
+          "chunks_per_s": 26.425521727117317,
+          "audio_duration_s": 129.68,
+          "audio_s_per_s": 49.66466170395035,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3725,
+          "total_tokens": 16181,
+          "engine_time_s": 41.196457,
+          "poll_count": 51,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.37384462356567383,
+            "mean": 1.4766328162041262,
+            "p50": 1.433905839920044,
+            "p95": 2.439563560485839,
+            "p99": 2.603253116607666,
+            "max": 2.605973243713379
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "4c5d2b7e-4f9c-4f5f-b6d7-8dfebf140189",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3725",
+            "x-total-tokens": "16181",
+            "x-engine-time": "41.196457"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-06",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528219.655007,
+      "runner_finished_unix": 1784528222.2771595,
+      "client_wall_s": 2.622150602284819,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 6,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528219.6567774,
+      "service_finished_unix": 1784528222.20546,
+      "service_makespan_s": 2.548682689666748,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 27.0728091338126,
+      "audio_duration_s": 129.24,
+      "service_audio_s_per_s": 50.70854858628899,
+      "jobs": [
+        {
+          "label": "run-06-job-01",
+          "request_id": "58a6dce6-3787-44b7-a16c-a840490fbf56",
+          "runner_started_unix": 1784528219.6553197,
+          "client_submit_started_unix": 1784528219.6553202,
+          "server_created_unix": 1784528219.6561708,
+          "response_received_unix": 1784528219.6569822,
+          "runner_finished_unix": 1784528222.276368,
+          "runner_wall_s": 2.6210499750450253,
+          "job_started_unix": 1784528219.6567774,
+          "job_updated_unix": 1784528222.20546,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.548682689666748,
+          "chunks_per_s": 27.0728091338126,
+          "audio_duration_s": 129.24,
+          "audio_s_per_s": 50.70854858628899,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3714,
+          "total_tokens": 16170,
+          "engine_time_s": 40.799718,
+          "poll_count": 50,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.3907756805419922,
+            "mean": 1.472982783248459,
+            "p50": 1.4468364715576172,
+            "p95": 2.4204923629760735,
+            "p99": 2.5374591159820556,
+            "max": 2.5428993701934814
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "58a6dce6-3787-44b7-a16c-a840490fbf56",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3714",
+            "x-total-tokens": "16170",
+            "x-engine-time": "40.799718"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-07",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528222.282502,
+      "runner_finished_unix": 1784528224.9415565,
+      "client_wall_s": 2.6590529452078044,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 7,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528222.2848256,
+      "service_finished_unix": 1784528224.8875148,
+      "service_makespan_s": 2.602689266204834,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 26.511040290496837,
+      "audio_duration_s": 129.44,
+      "service_audio_s_per_s": 49.733174713071165,
+      "jobs": [
+        {
+          "label": "run-07-job-01",
+          "request_id": "9e521bbd-1913-4d30-bcd5-68aaf4b795e0",
+          "runner_started_unix": 1784528222.2830923,
+          "client_submit_started_unix": 1784528222.2830925,
+          "server_created_unix": 1784528222.2841501,
+          "response_received_unix": 1784528222.284984,
+          "runner_finished_unix": 1784528224.9404845,
+          "runner_wall_s": 2.657394696958363,
+          "job_started_unix": 1784528222.2848256,
+          "job_updated_unix": 1784528224.8875148,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.602689266204834,
+          "chunks_per_s": 26.511040290496837,
+          "audio_duration_s": 129.44,
+          "audio_s_per_s": 49.733174713071165,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3719,
+          "total_tokens": 16175,
+          "engine_time_s": 41.709742,
+          "poll_count": 51,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.38687825202941895,
+            "mean": 1.471346354139024,
+            "p50": 1.4149372577667236,
+            "p95": 2.4613973617553704,
+            "p99": 2.5962850952148435,
+            "max": 2.5990052223205566
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "9e521bbd-1913-4d30-bcd5-68aaf4b795e0",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3719",
+            "x-total-tokens": "16175",
+            "x-engine-time": "41.709742"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-08",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528224.9462664,
+      "runner_finished_unix": 1784528227.6798134,
+      "client_wall_s": 2.733545077033341,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 8,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528224.9485214,
+      "service_finished_unix": 1784528227.6198256,
+      "service_makespan_s": 2.671304225921631,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 25.83007930375066,
+      "audio_duration_s": 129.04,
+      "service_audio_s_per_s": 48.3059917877679,
+      "jobs": [
+        {
+          "label": "run-08-job-01",
+          "request_id": "3344b415-44e0-4784-9b87-3aed89b13d7a",
+          "runner_started_unix": 1784528224.9467244,
+          "client_submit_started_unix": 1784528224.9467247,
+          "server_created_unix": 1784528224.9479623,
+          "response_received_unix": 1784528224.948937,
+          "runner_finished_unix": 1784528227.6791797,
+          "runner_wall_s": 2.7324574128724635,
+          "job_started_unix": 1784528224.9485214,
+          "job_updated_unix": 1784528227.6198256,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.671304225921631,
+          "chunks_per_s": 25.83007930375066,
+          "audio_duration_s": 129.04,
+          "audio_s_per_s": 48.3059917877679,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3709,
+          "total_tokens": 16165,
+          "engine_time_s": 43.127041,
+          "poll_count": 52,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.3473329544067383,
+            "mean": 1.5066458729730137,
+            "p50": 1.4113941192626953,
+            "p95": 2.5778609275817863,
+            "p99": 2.6647457981109617,
+            "max": 2.667465925216675
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "3344b415-44e0-4784-9b87-3aed89b13d7a",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3709",
+            "x-total-tokens": "16165",
+            "x-engine-time": "43.127041"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-09",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528227.68493,
+      "runner_finished_unix": 1784528230.4543858,
+      "client_wall_s": 2.769454023335129,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 9,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528227.6870606,
+      "service_finished_unix": 1784528230.3782415,
+      "service_makespan_s": 2.691180944442749,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 25.63930163911276,
+      "audio_duration_s": 130.2,
+      "service_audio_s_per_s": 48.38024744076059,
+      "jobs": [
+        {
+          "label": "run-09-job-01",
+          "request_id": "d78cfca9-7ae7-4d28-aca5-3ca3d1ba2e9b",
+          "runner_started_unix": 1784528227.6854753,
+          "client_submit_started_unix": 1784528227.6854756,
+          "server_created_unix": 1784528227.6865335,
+          "response_received_unix": 1784528227.6875234,
+          "runner_finished_unix": 1784528230.45304,
+          "runner_wall_s": 2.767566771712154,
+          "job_started_unix": 1784528227.6870606,
+          "job_updated_unix": 1784528230.3782415,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.691180944442749,
+          "chunks_per_s": 25.63930163911276,
+          "audio_duration_s": 130.2,
+          "audio_s_per_s": 48.38024744076059,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3738,
+          "total_tokens": 16194,
+          "engine_time_s": 40.927768,
+          "poll_count": 52,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.43695592880249023,
+            "mean": 1.5479759375254314,
+            "p50": 1.5130174160003662,
+            "p95": 2.555477094650268,
+            "p99": 2.679644088745117,
+            "max": 2.685084342956543
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "d78cfca9-7ae7-4d28-aca5-3ca3d1ba2e9b",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3738",
+            "x-total-tokens": "16194",
+            "x-engine-time": "40.927768"
+          }
+        }
+      ]
+    },
+    {
+      "label": "run-10",
+      "parallel_jobs": 1,
+      "runner_started_unix": 1784528230.4592538,
+      "runner_finished_unix": 1784528233.218995,
+      "client_wall_s": 2.7597394599579275,
+      "client_submit_skew_s": 0.0,
+      "server_create_skew_s": 0.0,
+      "health_before": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 10,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "service_started_unix": 1784528230.462276,
+      "service_finished_unix": 1784528233.112776,
+      "service_makespan_s": 2.6505000591278076,
+      "job_makespan_spread_s": 0.0,
+      "chunks": 69,
+      "service_chunks_per_s": 26.032823414727872,
+      "audio_duration_s": 129.56,
+      "service_audio_s_per_s": 48.8813420523499,
+      "jobs": [
+        {
+          "label": "run-10-job-01",
+          "request_id": "8fbfd448-3891-46de-8654-5fdfc2527cfb",
+          "runner_started_unix": 1784528230.4599576,
+          "client_submit_started_unix": 1784528230.4599578,
+          "server_created_unix": 1784528230.4616385,
+          "response_received_unix": 1784528230.4629338,
+          "runner_finished_unix": 1784528233.2109396,
+          "runner_wall_s": 2.750984548125416,
+          "job_started_unix": 1784528230.462276,
+          "job_updated_unix": 1784528233.112776,
+          "status": "succeeded",
+          "chunks_total": 69,
+          "chunks_completed": 69,
+          "chunks_failed": 0,
+          "chunks_degraded": 0,
+          "audio_cache_hit": true,
+          "in_flight_limit": 20,
+          "job_makespan_s": 2.6505000591278076,
+          "chunks_per_s": 26.032823414727872,
+          "audio_duration_s": 129.56,
+          "audio_s_per_s": 48.8813420523499,
+          "prompt_tokens": 12456,
+          "completion_tokens": 3722,
+          "total_tokens": 16178,
+          "engine_time_s": 40.875185,
+          "poll_count": 51,
+          "poll_interval_s": 0.05,
+          "poll_errors": [],
+          "completion_trace_files": 69,
+          "completion_offset_s": {
+            "n": 69,
+            "min": 0.437899112701416,
+            "mean": 1.5207436533941738,
+            "p50": 1.4619576930999756,
+            "p95": 2.504417133331298,
+            "p99": 2.6433050537109373,
+            "max": 2.6460251808166504
+          },
+          "wav_validation": {
+            "files": 69,
+            "valid_pcm16_24k_mono": 69,
+            "invalid": []
+          },
+          "response_headers": {
+            "x-request-id": "8fbfd448-3891-46de-8654-5fdfc2527cfb",
+            "x-cache-hit": "true",
+            "x-transcript-encoding": "urlencoded-utf8",
+            "x-chunk-from": "0",
+            "x-chunks-returned": "69",
+            "x-chunks-total": "69",
+            "x-audio-format": "audio/wav",
+            "x-prompt-tokens": "12456",
+            "x-completion-tokens": "3722",
+            "x-total-tokens": "16178",
+            "x-engine-time": "40.875185"
+          }
+        }
+      ]
+    }
+  ],
+  "warmup": [
+    {
+      "label": "warmup-01-job-01",
+      "request_id": "438e0a50-cb2c-4fd4-b4a9-4b6bf8662dde",
+      "runner_started_unix": 1784528200.946401,
+      "client_submit_started_unix": 1784528200.9464011,
+      "server_created_unix": 1784528200.9472756,
+      "response_received_unix": 1784528200.9480655,
+      "runner_finished_unix": 1784528206.1482522,
+      "runner_wall_s": 5.201853642240167,
+      "job_started_unix": 1784528200.9478228,
+      "job_updated_unix": 1784528206.07248,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 5.124657154083252,
+      "chunks_per_s": 13.46431535327623,
+      "audio_duration_s": 129.64,
+      "audio_s_per_s": 25.297302063749715,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3724,
+      "total_tokens": 16180,
+      "engine_time_s": 41.797524,
+      "poll_count": 100,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 2.718782663345337,
+        "mean": 3.9922480963278506,
+        "p50": 4.050860166549683,
+        "p95": 4.956512784957885,
+        "p99": 5.120202293395996,
+        "max": 5.122922420501709
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "438e0a50-cb2c-4fd4-b4a9-4b6bf8662dde",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3724",
+        "x-total-tokens": "16180",
+        "x-engine-time": "41.797524"
+      }
+    }
+  ],
+  "per_run": [
+    {
+      "label": "run-01-job-01",
+      "request_id": "cefd76ca-ef7f-40ed-9af6-2d0e80d5d4f5",
+      "runner_started_unix": 1784528206.1569967,
+      "client_submit_started_unix": 1784528206.1569972,
+      "server_created_unix": 1784528206.1597416,
+      "response_received_unix": 1784528206.161439,
+      "runner_finished_unix": 1784528208.884059,
+      "runner_wall_s": 2.7270647739060223,
+      "job_started_unix": 1784528206.1613262,
+      "job_updated_unix": 1784528208.8202653,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.6589391231536865,
+      "chunks_per_s": 25.950199235160078,
+      "audio_duration_s": 130.08,
+      "audio_s_per_s": 48.921766905936565,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3735,
+      "total_tokens": 16191,
+      "engine_time_s": 41.656648,
+      "poll_count": 52,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.4214487075805664,
+        "mean": 1.497511248657669,
+        "p50": 1.4615092277526855,
+        "p95": 2.5335713863372797,
+        "p99": 2.6508581542968748,
+        "max": 2.653578281402588
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "cefd76ca-ef7f-40ed-9af6-2d0e80d5d4f5",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3735",
+        "x-total-tokens": "16191",
+        "x-engine-time": "41.656648"
+      }
+    },
+    {
+      "label": "run-02-job-01",
+      "request_id": "6258be75-a704-4779-a75a-476b388435d2",
+      "runner_started_unix": 1784528208.8895905,
+      "client_submit_started_unix": 1784528208.889591,
+      "server_created_unix": 1784528208.8907044,
+      "response_received_unix": 1784528208.8915367,
+      "runner_finished_unix": 1784528211.6230035,
+      "runner_wall_s": 2.733415314927697,
+      "job_started_unix": 1784528208.8913255,
+      "job_updated_unix": 1784528211.5154834,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.6241579055786133,
+      "chunks_per_s": 26.29414939295959,
+      "audio_duration_s": 130.8,
+      "audio_s_per_s": 49.84456145795818,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3753,
+      "total_tokens": 16209,
+      "engine_time_s": 41.17807,
+      "poll_count": 52,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.39960646629333496,
+        "mean": 1.4688858433046204,
+        "p50": 1.3916640281677246,
+        "p95": 2.4405247211456293,
+        "p99": 2.617014875411987,
+        "max": 2.6197350025177
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "6258be75-a704-4779-a75a-476b388435d2",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3753",
+        "x-total-tokens": "16209",
+        "x-engine-time": "41.178070"
+      }
+    },
+    {
+      "label": "run-03-job-01",
+      "request_id": "6bcb56cd-82c7-4130-b564-a7f6cd096edd",
+      "runner_started_unix": 1784528211.6291082,
+      "client_submit_started_unix": 1784528211.6291084,
+      "server_created_unix": 1784528211.629985,
+      "response_received_unix": 1784528211.6309247,
+      "runner_finished_unix": 1784528214.2872806,
+      "runner_wall_s": 2.658173873089254,
+      "job_started_unix": 1784528211.6307704,
+      "job_updated_unix": 1784528214.2186797,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.58790922164917,
+      "chunks_per_s": 26.662449912377177,
+      "audio_duration_s": 130.68,
+      "audio_s_per_s": 50.496361660136955,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3750,
+      "total_tokens": 16206,
+      "engine_time_s": 41.140988,
+      "poll_count": 51,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.37631869316101074,
+        "mean": 1.4632801767708599,
+        "p50": 1.3923776149749756,
+        "p95": 2.4772402286529536,
+        "p99": 2.5777261161804197,
+        "max": 2.580446243286133
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "6bcb56cd-82c7-4130-b564-a7f6cd096edd",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3750",
+        "x-total-tokens": "16206",
+        "x-engine-time": "41.140988"
+      }
+    },
+    {
+      "label": "run-04-job-01",
+      "request_id": "b041c20e-1b10-496b-adff-b3dfbbf0157f",
+      "runner_started_unix": 1784528214.2931201,
+      "client_submit_started_unix": 1784528214.2931201,
+      "server_created_unix": 1784528214.2938998,
+      "response_received_unix": 1784528214.2948477,
+      "runner_finished_unix": 1784528216.9934697,
+      "runner_wall_s": 2.7003511330112815,
+      "job_started_unix": 1784528214.2947178,
+      "job_updated_unix": 1784528216.8695998,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.5748820304870605,
+      "chunks_per_s": 26.797344182384958,
+      "audio_duration_s": 130.12,
+      "audio_s_per_s": 50.534353985680156,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3736,
+      "total_tokens": 16192,
+      "engine_time_s": 40.426809,
+      "poll_count": 50,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.4285283088684082,
+        "mean": 1.4785599915877632,
+        "p50": 1.4285860061645508,
+        "p95": 2.456645393371581,
+        "p99": 2.5659317874908445,
+        "max": 2.5686519145965576
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "b041c20e-1b10-496b-adff-b3dfbbf0157f",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3736",
+        "x-total-tokens": "16192",
+        "x-engine-time": "40.426809"
+      }
+    },
+    {
+      "label": "run-05-job-01",
+      "request_id": "4c5d2b7e-4f9c-4f5f-b6d7-8dfebf140189",
+      "runner_started_unix": 1784528216.9998825,
+      "client_submit_started_unix": 1784528216.9998825,
+      "server_created_unix": 1784528217.0009072,
+      "response_received_unix": 1784528217.0017045,
+      "runner_finished_unix": 1784528219.6493063,
+      "runner_wall_s": 2.649425328243524,
+      "job_started_unix": 1784528217.0015545,
+      "job_updated_unix": 1784528219.6126666,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.611112117767334,
+      "chunks_per_s": 26.425521727117317,
+      "audio_duration_s": 129.68,
+      "audio_s_per_s": 49.66466170395035,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3725,
+      "total_tokens": 16181,
+      "engine_time_s": 41.196457,
+      "poll_count": 51,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.37384462356567383,
+        "mean": 1.4766328162041262,
+        "p50": 1.433905839920044,
+        "p95": 2.439563560485839,
+        "p99": 2.603253116607666,
+        "max": 2.605973243713379
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "4c5d2b7e-4f9c-4f5f-b6d7-8dfebf140189",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3725",
+        "x-total-tokens": "16181",
+        "x-engine-time": "41.196457"
+      }
+    },
+    {
+      "label": "run-06-job-01",
+      "request_id": "58a6dce6-3787-44b7-a16c-a840490fbf56",
+      "runner_started_unix": 1784528219.6553197,
+      "client_submit_started_unix": 1784528219.6553202,
+      "server_created_unix": 1784528219.6561708,
+      "response_received_unix": 1784528219.6569822,
+      "runner_finished_unix": 1784528222.276368,
+      "runner_wall_s": 2.6210499750450253,
+      "job_started_unix": 1784528219.6567774,
+      "job_updated_unix": 1784528222.20546,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.548682689666748,
+      "chunks_per_s": 27.0728091338126,
+      "audio_duration_s": 129.24,
+      "audio_s_per_s": 50.70854858628899,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3714,
+      "total_tokens": 16170,
+      "engine_time_s": 40.799718,
+      "poll_count": 50,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.3907756805419922,
+        "mean": 1.472982783248459,
+        "p50": 1.4468364715576172,
+        "p95": 2.4204923629760735,
+        "p99": 2.5374591159820556,
+        "max": 2.5428993701934814
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "58a6dce6-3787-44b7-a16c-a840490fbf56",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3714",
+        "x-total-tokens": "16170",
+        "x-engine-time": "40.799718"
+      }
+    },
+    {
+      "label": "run-07-job-01",
+      "request_id": "9e521bbd-1913-4d30-bcd5-68aaf4b795e0",
+      "runner_started_unix": 1784528222.2830923,
+      "client_submit_started_unix": 1784528222.2830925,
+      "server_created_unix": 1784528222.2841501,
+      "response_received_unix": 1784528222.284984,
+      "runner_finished_unix": 1784528224.9404845,
+      "runner_wall_s": 2.657394696958363,
+      "job_started_unix": 1784528222.2848256,
+      "job_updated_unix": 1784528224.8875148,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.602689266204834,
+      "chunks_per_s": 26.511040290496837,
+      "audio_duration_s": 129.44,
+      "audio_s_per_s": 49.733174713071165,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3719,
+      "total_tokens": 16175,
+      "engine_time_s": 41.709742,
+      "poll_count": 51,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.38687825202941895,
+        "mean": 1.471346354139024,
+        "p50": 1.4149372577667236,
+        "p95": 2.4613973617553704,
+        "p99": 2.5962850952148435,
+        "max": 2.5990052223205566
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "9e521bbd-1913-4d30-bcd5-68aaf4b795e0",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3719",
+        "x-total-tokens": "16175",
+        "x-engine-time": "41.709742"
+      }
+    },
+    {
+      "label": "run-08-job-01",
+      "request_id": "3344b415-44e0-4784-9b87-3aed89b13d7a",
+      "runner_started_unix": 1784528224.9467244,
+      "client_submit_started_unix": 1784528224.9467247,
+      "server_created_unix": 1784528224.9479623,
+      "response_received_unix": 1784528224.948937,
+      "runner_finished_unix": 1784528227.6791797,
+      "runner_wall_s": 2.7324574128724635,
+      "job_started_unix": 1784528224.9485214,
+      "job_updated_unix": 1784528227.6198256,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.671304225921631,
+      "chunks_per_s": 25.83007930375066,
+      "audio_duration_s": 129.04,
+      "audio_s_per_s": 48.3059917877679,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3709,
+      "total_tokens": 16165,
+      "engine_time_s": 43.127041,
+      "poll_count": 52,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.3473329544067383,
+        "mean": 1.5066458729730137,
+        "p50": 1.4113941192626953,
+        "p95": 2.5778609275817863,
+        "p99": 2.6647457981109617,
+        "max": 2.667465925216675
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "3344b415-44e0-4784-9b87-3aed89b13d7a",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3709",
+        "x-total-tokens": "16165",
+        "x-engine-time": "43.127041"
+      }
+    },
+    {
+      "label": "run-09-job-01",
+      "request_id": "d78cfca9-7ae7-4d28-aca5-3ca3d1ba2e9b",
+      "runner_started_unix": 1784528227.6854753,
+      "client_submit_started_unix": 1784528227.6854756,
+      "server_created_unix": 1784528227.6865335,
+      "response_received_unix": 1784528227.6875234,
+      "runner_finished_unix": 1784528230.45304,
+      "runner_wall_s": 2.767566771712154,
+      "job_started_unix": 1784528227.6870606,
+      "job_updated_unix": 1784528230.3782415,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.691180944442749,
+      "chunks_per_s": 25.63930163911276,
+      "audio_duration_s": 130.2,
+      "audio_s_per_s": 48.38024744076059,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3738,
+      "total_tokens": 16194,
+      "engine_time_s": 40.927768,
+      "poll_count": 52,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.43695592880249023,
+        "mean": 1.5479759375254314,
+        "p50": 1.5130174160003662,
+        "p95": 2.555477094650268,
+        "p99": 2.679644088745117,
+        "max": 2.685084342956543
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "d78cfca9-7ae7-4d28-aca5-3ca3d1ba2e9b",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3738",
+        "x-total-tokens": "16194",
+        "x-engine-time": "40.927768"
+      }
+    },
+    {
+      "label": "run-10-job-01",
+      "request_id": "8fbfd448-3891-46de-8654-5fdfc2527cfb",
+      "runner_started_unix": 1784528230.4599576,
+      "client_submit_started_unix": 1784528230.4599578,
+      "server_created_unix": 1784528230.4616385,
+      "response_received_unix": 1784528230.4629338,
+      "runner_finished_unix": 1784528233.2109396,
+      "runner_wall_s": 2.750984548125416,
+      "job_started_unix": 1784528230.462276,
+      "job_updated_unix": 1784528233.112776,
+      "status": "succeeded",
+      "chunks_total": 69,
+      "chunks_completed": 69,
+      "chunks_failed": 0,
+      "chunks_degraded": 0,
+      "audio_cache_hit": true,
+      "in_flight_limit": 20,
+      "job_makespan_s": 2.6505000591278076,
+      "chunks_per_s": 26.032823414727872,
+      "audio_duration_s": 129.56,
+      "audio_s_per_s": 48.8813420523499,
+      "prompt_tokens": 12456,
+      "completion_tokens": 3722,
+      "total_tokens": 16178,
+      "engine_time_s": 40.875185,
+      "poll_count": 51,
+      "poll_interval_s": 0.05,
+      "poll_errors": [],
+      "completion_trace_files": 69,
+      "completion_offset_s": {
+        "n": 69,
+        "min": 0.437899112701416,
+        "mean": 1.5207436533941738,
+        "p50": 1.4619576930999756,
+        "p95": 2.504417133331298,
+        "p99": 2.6433050537109373,
+        "max": 2.6460251808166504
+      },
+      "wav_validation": {
+        "files": 69,
+        "valid_pcm16_24k_mono": 69,
+        "invalid": []
+      },
+      "response_headers": {
+        "x-request-id": "8fbfd448-3891-46de-8654-5fdfc2527cfb",
+        "x-cache-hit": "true",
+        "x-transcript-encoding": "urlencoded-utf8",
+        "x-chunk-from": "0",
+        "x-chunks-returned": "69",
+        "x-chunks-total": "69",
+        "x-audio-format": "audio/wav",
+        "x-prompt-tokens": "12456",
+        "x-completion-tokens": "3722",
+        "x-total-tokens": "16178",
+        "x-engine-time": "40.875185"
+      }
+    }
+  ],
+  "request_profile": {
+    "semantics": {
+      "queue_wait_ms": "scheduler_prefill_start - scheduler_queue_enter",
+      "engine_complete_after_prefill_ms": "tts_engine stage_complete - scheduler_prefill_start",
+      "engine_complete_after_queue_ms": "tts_engine stage_complete - scheduler_queue_enter",
+      "first_emit_note": "scheduler_first_emit is intentionally absent on this non-streaming SRT path"
+    },
+    "event_files": [
+      {
+        "path": "/root/autodl-tmp/prod-compare/results/candidate-single-10-0f0a696/events/events_coordinator_634728.jsonl",
+        "bytes": 412896,
+        "sha256": "003e649675ef09dc2bf403a190997729d09b2c0b0666151aa731dd42efc655ed"
+      },
+      {
+        "path": "/root/autodl-tmp/prod-compare/results/candidate-single-10-0f0a696/events/events_preprocessing_634877.jsonl",
+        "bytes": 4440909,
+        "sha256": "d82fc3dcd4c89a034cb6d8a06df4fd6e2e86a1e040f7d83edb25bfc0e8f7b76f"
+      }
+    ],
+    "measured_requests": 690,
+    "expected_measured_requests": 690,
+    "guard_window": {
+      "started_unix": 1784528206.1493063,
+      "finished_unix": 1784528233.2190456,
+      "requests": 690
+    },
+    "queue_wait_ms": {
+      "n": 690,
+      "min": 1.685778,
+      "mean": 38.14046476521739,
+      "p50": 36.6173175,
+      "p95": 76.4742273,
+      "p99": 81.40105273000002,
+      "max": 89.201158
+    },
+    "engine_complete_after_prefill_ms": {
+      "n": 690,
+      "min": 268.916478,
+      "mean": 561.1070233173913,
+      "p50": 557.521524,
+      "p95": 740.10327725,
+      "p99": 816.0265101900002,
+      "max": 922.637355
+    },
+    "engine_complete_after_queue_ms": {
+      "n": 690,
+      "min": 271.437342,
+      "mean": 599.2474880826087,
+      "p50": 605.5396229999999,
+      "p95": 791.9217995500001,
+      "p99": 863.7984648600002,
+      "max": 981.734092
+    },
+    "per_wave": [
+      {
+        "label": "run-01",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 2.521756,
+          "mean": 35.22466234782609,
+          "p50": 28.92359,
+          "p95": 75.8603206,
+          "p99": 76.0327436,
+          "max": 76.091499
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 301.415952,
+          "mean": 569.0118611159421,
+          "p50": 576.174335,
+          "p95": 737.6287287999997,
+          "p99": 840.9044643199998,
+          "max": 862.266376
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 305.436917,
+          "mean": 604.2365234637682,
+          "p50": 609.566313,
+          "p95": 758.6550239999999,
+          "p99": 870.6001943199993,
+          "max": 936.303036
+        }
+      },
+      {
+        "label": "run-02",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.780571,
+          "mean": 37.02009873913043,
+          "p50": 29.394979,
+          "p95": 74.6187636,
+          "p99": 75.84104695999999,
+          "max": 77.213136
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 287.339851,
+          "mean": 560.1616500869565,
+          "p50": 562.727182,
+          "p95": 745.64598,
+          "p99": 809.9806841999996,
+          "max": 851.777265
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 290.232508,
+          "mean": 597.181748826087,
+          "p50": 606.927103,
+          "p95": 792.8263408,
+          "p99": 849.5658231599992,
+          "max": 922.323282
+        }
+      },
+      {
+        "label": "run-03",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.772488,
+          "mean": 37.102811521739135,
+          "p50": 32.366513,
+          "p95": 75.0737528,
+          "p99": 81.13515248,
+          "max": 81.256134
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 293.94809,
+          "mean": 559.4961797246377,
+          "p50": 558.861886,
+          "p95": 702.8167169999999,
+          "p99": 790.52840988,
+          "max": 790.537579
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 296.204728,
+          "mean": 596.5989912463767,
+          "p50": 606.208342,
+          "p95": 738.7434609999999,
+          "p99": 845.3440361199998,
+          "max": 861.663367
+        }
+      },
+      {
+        "label": "run-04",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.685778,
+          "mean": 38.78916807246377,
+          "p50": 42.961479,
+          "p95": 77.36554699999999,
+          "p99": 79.09586476,
+          "max": 79.191672
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 282.17858,
+          "mean": 547.5292144202898,
+          "p50": 533.518956,
+          "p95": 712.5412458,
+          "p99": 737.7991811199997,
+          "max": 762.18542
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 283.998858,
+          "mean": 586.3183824927537,
+          "p50": 594.358677,
+          "p95": 741.8997251999999,
+          "p99": 808.3875905199998,
+          "max": 833.410884
+        }
+      },
+      {
+        "label": "run-05",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.928817,
+          "mean": 37.010656347826085,
+          "p50": 31.867722,
+          "p95": 74.4837702,
+          "p99": 76.16496864,
+          "max": 76.79601
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 292.983359,
+          "mean": 560.4794233043478,
+          "p50": 561.674566,
+          "p95": 737.0853244,
+          "p99": 778.2635631199998,
+          "max": 788.166873
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 295.866945,
+          "mean": 597.4900796521739,
+          "p50": 586.280224,
+          "p95": 771.1652351999999,
+          "p99": 820.5741123599996,
+          "max": 862.587384
+        }
+      },
+      {
+        "label": "run-06",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.916867,
+          "mean": 36.91030411594203,
+          "p50": 30.765077,
+          "p95": 76.75940619999999,
+          "p99": 81.48754331999993,
+          "max": 89.201158
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 305.046306,
+          "mean": 555.5281278550724,
+          "p50": 546.971948,
+          "p95": 721.0153912,
+          "p99": 759.071785,
+          "max": 764.025585
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 307.327385,
+          "mean": 592.4384319710146,
+          "p50": 595.220406,
+          "p95": 749.8932785999998,
+          "p99": 815.5906728399998,
+          "max": 837.464802
+        }
+      },
+      {
+        "label": "run-07",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.709861,
+          "mean": 38.005811971014495,
+          "p50": 36.826963,
+          "p95": 75.6374146,
+          "p99": 76.87148479999999,
+          "max": 78.402175
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 300.371242,
+          "mean": 566.9452016231884,
+          "p50": 559.880196,
+          "p95": 744.7829461999997,
+          "p99": 810.8592603999996,
+          "max": 854.635005
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 302.922218,
+          "mean": 604.951013594203,
+          "p50": 614.442519,
+          "p95": 814.3286865999997,
+          "p99": 875.3984141999996,
+          "max": 921.523144
+        }
+      },
+      {
+        "label": "run-08",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.848379,
+          "mean": 39.0535918115942,
+          "p50": 44.745183,
+          "p95": 76.794739,
+          "p99": 77.26395428,
+          "max": 77.630562
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 268.916478,
+          "mean": 586.6669307971015,
+          "p50": 572.345841,
+          "p95": 762.5464729999999,
+          "p99": 872.7139425599994,
+          "max": 922.637355
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 271.437342,
+          "mean": 625.7205226086957,
+          "p50": 618.016472,
+          "p95": 828.3074823999998,
+          "p99": 929.6752265999994,
+          "max": 981.734092
+        }
+      },
+      {
+        "label": "run-09",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 2.183565,
+          "mean": 43.42903389855073,
+          "p50": 50.412019,
+          "p95": 77.1226274,
+          "p99": 82.75969512,
+          "max": 82.823711
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 273.224145,
+          "mean": 550.6461154782609,
+          "p50": 551.68321,
+          "p95": 724.6071189999998,
+          "p99": 793.86448888,
+          "max": 801.593613
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 275.827848,
+          "mean": 594.0751493768116,
+          "p50": 605.868266,
+          "p95": 743.6308748,
+          "p99": 847.9312036399997,
+          "max": 873.59721
+        }
+      },
+      {
+        "label": "run-10",
+        "requests": 69,
+        "queue_wait_ms": {
+          "n": 69,
+          "min": 1.8654,
+          "mean": 38.85850882608696,
+          "p50": 35.152297,
+          "p95": 80.8293798,
+          "p99": 88.39759912,
+          "max": 88.494034
+        },
+        "engine_complete_after_prefill_ms": {
+          "n": 69,
+          "min": 271.909683,
+          "mean": 554.605528768116,
+          "p50": 553.370217,
+          "p95": 725.5000319999999,
+          "p99": 822.6165661999999,
+          "max": 840.514156
+        },
+        "engine_complete_after_queue_ms": {
+          "n": 69,
+          "min": 274.996894,
+          "mean": 593.4640375942029,
+          "p50": 598.186906,
+          "p95": 796.386083,
+          "p99": 857.4429186399997,
+          "max": 887.464206
+        }
+      }
+    ]
+  },
+  "profile_control": {
+    "start": {
+      "run_id": "candidate-single-10-0f0a696-events",
+      "event_dir": "/root/autodl-tmp/prod-compare/results/candidate-single-10-0f0a696/events"
+    },
+    "stop": {
+      "run_id": "candidate-single-10-0f0a696-events"
+    }
+  },
+  "failure_safety": {
+    "request_journal": "/root/autodl-tmp/prod-compare/results/candidate-single-10-0f0a696/request-journal.jsonl",
+    "recovery": {
+      "clean": true,
+      "requests": {
+        "9e521bbd-1913-4d30-bcd5-68aaf4b795e0": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "4c5d2b7e-4f9c-4f5f-b6d7-8dfebf140189": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "8fbfd448-3891-46de-8654-5fdfc2527cfb": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "3344b415-44e0-4784-9b87-3aed89b13d7a": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "58a6dce6-3787-44b7-a16c-a840490fbf56": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "438e0a50-cb2c-4fd4-b4a9-4b6bf8662dde": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "6bcb56cd-82c7-4130-b564-a7f6cd096edd": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "6258be75-a704-4779-a75a-476b388435d2": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "d78cfca9-7ae7-4d28-aca5-3ca3d1ba2e9b": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "cefd76ca-ef7f-40ed-9af6-2d0e80d5d4f5": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        },
+        "b041c20e-1b10-496b-adff-b3dfbbf0157f": {
+          "status": "succeeded",
+          "chunks_completed": 69,
+          "chunks_failed": 0
+        }
+      },
+      "health": {
+        "status": "ok",
+        "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+        "sglang_ready": true,
+        "sglang_base_url": "http://127.0.0.1:8000",
+        "sglang_status": {
+          "status": "healthy",
+          "running": true,
+          "stages": [
+            "preprocessing",
+            "audio_encoder",
+            "tts_engine",
+            "vocoder"
+          ],
+          "entry_stage": "preprocessing",
+          "total_requests": 0,
+          "pending_completions": 0,
+          "request_states": {}
+        },
+        "cache_audio_count": 1,
+        "cache_transcript_count": 1,
+        "active_tts_jobs": 0,
+        "tts_jobs": {
+          "queued": 0,
+          "running": 0,
+          "succeeded": 11,
+          "failed": 0
+        },
+        "max_concurrent_chunks": 96,
+        "short_reserved_chunks": 4,
+        "long_concurrent_chunks": 92,
+        "short_request_max_chars": 1000,
+        "short_request_max_chunks": 4,
+        "max_in_flight_chunks_per_job": 10,
+        "max_burst_in_flight_chunks_per_job": 20,
+        "max_burst_active_jobs": 2,
+        "busy_backlog_chunks": 2000,
+        "outstanding_chunks": 0,
+        "lane_inflight": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "lane_waiting": {
+          "short": 0,
+          "long": 0,
+          "default": 0
+        },
+        "job_ttl_seconds": 3600,
+        "streamed_job_ttl_seconds": 60
+      },
+      "last_error": null
+    },
+    "dirty_sentinel": "/root/autodl-tmp/prod-sim/prefill-benchmark-dirty.json"
+  },
+  "wav_validation_all_runs": {
+    "expected_files": 759,
+    "files": 759,
+    "invalid": [],
+    "total_duration_s": 1428.4799999999993
+  },
+  "log_audit": {
+    "retry_matches": 0,
+    "error_matches": 0,
+    "retry_lines": [],
+    "error_lines": []
+  },
+  "service_integrity": {
+    "api_pid_before": 128506,
+    "api_pid_after": 128506,
+    "bridge_runtime_before": {
+      "pid": 128506,
+      "cmdline": [
+        "/root/autodl-tmp/Fish-Audio/.venv/bin/python3",
+        "/root/autodl-tmp/Fish-Audio/.venv/bin/uvicorn",
+        "app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "6006"
+      ],
+      "cmdline_sha256": "6581e346a9010e5e225357860a50c3adaf43430b342d07e1f70730bb696f6c40",
+      "cwd": "/root/autodl-tmp/Fish-Audio",
+      "tts_cache_dir": "/root/autodl-tmp/tts-cache",
+      "verified_environment": {
+        "TTS_CACHE_DIR": "/root/autodl-tmp/tts-cache",
+        "TOK_PER_CHAR_LATIN": "2.0",
+        "PORT": "6006",
+        "HIGGS_DEFAULT_MAX_NEW_TOKENS": null,
+        "MAX_BURST_ACTIVE_JOBS": "2",
+        "MAX_NEW_TOKENS_FLOOR": null,
+        "DOWNLOAD_TIMEOUT": "60",
+        "MAX_CONCURRENT_CHUNKS": "96",
+        "HIGGS_TEMPERATURE": "0.8",
+        "KV_INPUT_RESERVE": null,
+        "CHUNK_MIN_BYTES": "512",
+        "TOK_PER_CHAR_DENSE": null,
+        "SHORT_LOUDNORM_SEC": null,
+        "LOG_LEVEL": "INFO",
+        "MAX_IN_FLIGHT_CHUNKS_PER_JOB": "10",
+        "JOB_CLEANUP_INTERVAL_SECONDS": "30",
+        "MAX_NEW_TOKENS_SAFETY": null,
+        "KV_SAFETY_MARGIN": null,
+        "STREAMED_JOB_TTL_SECONDS": "60",
+        "LN_TP_OVER_DB": "6",
+        "FFMPEG_THREADS": null,
+        "HIGGS_TOP_P": "",
+        "CHUNK_RETRY_ATTEMPTS": "3",
+        "EARLY_EOS_RATIO": "0.5",
+        "MAX_NEW_TOKENS_CEIL": null,
+        "MT_CONTEXT_TAIL_SEC": null,
+        "SUBSPLIT_TARGET_RATIO": "0.7",
+        "SGLANG_BASE_URL": "http://127.0.0.1:8000",
+        "HIGGS_TOP_K": "50",
+        "REQUEST_TIMEOUT": "600",
+        "TOK_PER_CHAR_ARABIC": "3.0",
+        "TTS_BACKEND_NAME": "bosonai/higgs-audio-v3-tts-4b",
+        "SHORT_REQUEST_MAX_CHARS": "1000",
+        "SHORT_RESERVED_CHUNKS": "4",
+        "TOK_PER_CHAR_THAI": "2.5",
+        "JOB_TTL_SECONDS": "3600",
+        "LOUDNORM_SHARED": "on",
+        "MAX_NEW_TOKENS_BASE": null,
+        "SUBSPLIT_ENABLE": "1",
+        "CHUNK_RETRY_BASE_DELAY": "1.0",
+        "MODEL_PATH": "bosonai/higgs-audio-v3-tts-4b",
+        "EARLY_EOS_MIN_EXPECTED_TOKENS": "96",
+        "LN_OUTLIER_DB": "6",
+        "MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB": "20",
+        "HOST": "0.0.0.0",
+        "FFMPEG_POST_CONCURRENCY": null,
+        "TOK_PER_CHAR_KANA": "4.8",
+        "SHORT_REQUEST_MAX_CHUNKS": "4",
+        "TOK_PER_CHAR_HANGUL": "3.8",
+        "FFMPEG_BIN": "ffmpeg",
+        "BUSY_BACKLOG_CHUNKS": "2000",
+        "CHUNK_SILENCE_MAX_DBFS": null,
+        "TOK_PER_CHAR_DEVANAGARI": "2.4",
+        "SPEECH_MODEL": "",
+        "KV_CACHE_CAPACITY": null,
+        "SUBSPLIT_MAX_PARTS": "8",
+        "LN_ANCHOR_WAIT_SEC": "120",
+        "STREAM_CHUNK_SIZE_BYTES": "4194304",
+        "FFMPEG_POST_NICE": null,
+        "TOK_PER_CHAR_HAN": "6.0"
+      },
+      "process_started_unix": 1784475383.19,
+      "source_mtime_unix": 1784475349.3974576
+    },
+    "bridge_runtime_after": {
+      "pid": 128506,
+      "cmdline": [
+        "/root/autodl-tmp/Fish-Audio/.venv/bin/python3",
+        "/root/autodl-tmp/Fish-Audio/.venv/bin/uvicorn",
+        "app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "6006"
+      ],
+      "cmdline_sha256": "6581e346a9010e5e225357860a50c3adaf43430b342d07e1f70730bb696f6c40",
+      "cwd": "/root/autodl-tmp/Fish-Audio",
+      "tts_cache_dir": "/root/autodl-tmp/tts-cache",
+      "verified_environment": {
+        "TTS_CACHE_DIR": "/root/autodl-tmp/tts-cache",
+        "TOK_PER_CHAR_LATIN": "2.0",
+        "PORT": "6006",
+        "HIGGS_DEFAULT_MAX_NEW_TOKENS": null,
+        "MAX_BURST_ACTIVE_JOBS": "2",
+        "MAX_NEW_TOKENS_FLOOR": null,
+        "DOWNLOAD_TIMEOUT": "60",
+        "MAX_CONCURRENT_CHUNKS": "96",
+        "HIGGS_TEMPERATURE": "0.8",
+        "KV_INPUT_RESERVE": null,
+        "CHUNK_MIN_BYTES": "512",
+        "TOK_PER_CHAR_DENSE": null,
+        "SHORT_LOUDNORM_SEC": null,
+        "LOG_LEVEL": "INFO",
+        "MAX_IN_FLIGHT_CHUNKS_PER_JOB": "10",
+        "JOB_CLEANUP_INTERVAL_SECONDS": "30",
+        "MAX_NEW_TOKENS_SAFETY": null,
+        "KV_SAFETY_MARGIN": null,
+        "STREAMED_JOB_TTL_SECONDS": "60",
+        "LN_TP_OVER_DB": "6",
+        "FFMPEG_THREADS": null,
+        "HIGGS_TOP_P": "",
+        "CHUNK_RETRY_ATTEMPTS": "3",
+        "EARLY_EOS_RATIO": "0.5",
+        "MAX_NEW_TOKENS_CEIL": null,
+        "MT_CONTEXT_TAIL_SEC": null,
+        "SUBSPLIT_TARGET_RATIO": "0.7",
+        "SGLANG_BASE_URL": "http://127.0.0.1:8000",
+        "HIGGS_TOP_K": "50",
+        "REQUEST_TIMEOUT": "600",
+        "TOK_PER_CHAR_ARABIC": "3.0",
+        "TTS_BACKEND_NAME": "bosonai/higgs-audio-v3-tts-4b",
+        "SHORT_REQUEST_MAX_CHARS": "1000",
+        "SHORT_RESERVED_CHUNKS": "4",
+        "TOK_PER_CHAR_THAI": "2.5",
+        "JOB_TTL_SECONDS": "3600",
+        "LOUDNORM_SHARED": "on",
+        "MAX_NEW_TOKENS_BASE": null,
+        "SUBSPLIT_ENABLE": "1",
+        "CHUNK_RETRY_BASE_DELAY": "1.0",
+        "MODEL_PATH": "bosonai/higgs-audio-v3-tts-4b",
+        "EARLY_EOS_MIN_EXPECTED_TOKENS": "96",
+        "LN_OUTLIER_DB": "6",
+        "MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB": "20",
+        "HOST": "0.0.0.0",
+        "FFMPEG_POST_CONCURRENCY": null,
+        "TOK_PER_CHAR_KANA": "4.8",
+        "SHORT_REQUEST_MAX_CHUNKS": "4",
+        "TOK_PER_CHAR_HANGUL": "3.8",
+        "FFMPEG_BIN": "ffmpeg",
+        "BUSY_BACKLOG_CHUNKS": "2000",
+        "CHUNK_SILENCE_MAX_DBFS": null,
+        "TOK_PER_CHAR_DEVANAGARI": "2.4",
+        "SPEECH_MODEL": "",
+        "KV_CACHE_CAPACITY": null,
+        "SUBSPLIT_MAX_PARTS": "8",
+        "LN_ANCHOR_WAIT_SEC": "120",
+        "STREAM_CHUNK_SIZE_BYTES": "4194304",
+        "FFMPEG_POST_NICE": null,
+        "TOK_PER_CHAR_HAN": "6.0"
+      },
+      "process_started_unix": 1784475383.19,
+      "source_mtime_unix": 1784475349.3974576
+    },
+    "bridge_source_before": {
+      "path": "/root/autodl-tmp/Fish-Audio/app.py",
+      "bytes": 92574,
+      "sha256": "00f37e06ac27d62f03d68686f1991d526db4884f7eec42b49398640885b44a37"
+    },
+    "bridge_source_after": {
+      "path": "/root/autodl-tmp/Fish-Audio/app.py",
+      "bytes": 92574,
+      "sha256": "00f37e06ac27d62f03d68686f1991d526db4884f7eec42b49398640885b44a37"
+    },
+    "bridge_health_before": {
+      "status": "ok",
+      "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+      "sglang_ready": true,
+      "sglang_base_url": "http://127.0.0.1:8000",
+      "sglang_status": {
+        "status": "healthy",
+        "running": true,
+        "stages": [
+          "preprocessing",
+          "audio_encoder",
+          "tts_engine",
+          "vocoder"
+        ],
+        "entry_stage": "preprocessing",
+        "total_requests": 0,
+        "pending_completions": 0,
+        "request_states": {}
+      },
+      "cache_audio_count": 1,
+      "cache_transcript_count": 1,
+      "active_tts_jobs": 0,
+      "tts_jobs": {
+        "queued": 0,
+        "running": 0,
+        "succeeded": 0,
+        "failed": 0
+      },
+      "max_concurrent_chunks": 96,
+      "short_reserved_chunks": 4,
+      "long_concurrent_chunks": 92,
+      "short_request_max_chars": 1000,
+      "short_request_max_chunks": 4,
+      "max_in_flight_chunks_per_job": 10,
+      "max_burst_in_flight_chunks_per_job": 20,
+      "max_burst_active_jobs": 2,
+      "busy_backlog_chunks": 2000,
+      "outstanding_chunks": 0,
+      "lane_inflight": {
+        "short": 0,
+        "long": 0,
+        "default": 0
+      },
+      "lane_waiting": {
+        "short": 0,
+        "long": 0,
+        "default": 0
+      },
+      "job_ttl_seconds": 3600,
+      "streamed_job_ttl_seconds": 60
+    },
+    "bridge_health_after_warmup": {
+      "status": "ok",
+      "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+      "sglang_ready": true,
+      "sglang_base_url": "http://127.0.0.1:8000",
+      "sglang_status": {
+        "status": "healthy",
+        "running": true,
+        "stages": [
+          "preprocessing",
+          "audio_encoder",
+          "tts_engine",
+          "vocoder"
+        ],
+        "entry_stage": "preprocessing",
+        "total_requests": 0,
+        "pending_completions": 0,
+        "request_states": {}
+      },
+      "cache_audio_count": 1,
+      "cache_transcript_count": 1,
+      "active_tts_jobs": 0,
+      "tts_jobs": {
+        "queued": 0,
+        "running": 0,
+        "succeeded": 1,
+        "failed": 0
+      },
+      "max_concurrent_chunks": 96,
+      "short_reserved_chunks": 4,
+      "long_concurrent_chunks": 92,
+      "short_request_max_chars": 1000,
+      "short_request_max_chunks": 4,
+      "max_in_flight_chunks_per_job": 10,
+      "max_burst_in_flight_chunks_per_job": 20,
+      "max_burst_active_jobs": 2,
+      "busy_backlog_chunks": 2000,
+      "outstanding_chunks": 0,
+      "lane_inflight": {
+        "short": 0,
+        "long": 0,
+        "default": 0
+      },
+      "lane_waiting": {
+        "short": 0,
+        "long": 0,
+        "default": 0
+      },
+      "job_ttl_seconds": 3600,
+      "streamed_job_ttl_seconds": 60
+    },
+    "bridge_health_after": {
+      "status": "ok",
+      "tts_backend_name": "bosonai/higgs-audio-v3-tts-4b",
+      "sglang_ready": true,
+      "sglang_base_url": "http://127.0.0.1:8000",
+      "sglang_status": {
+        "status": "healthy",
+        "running": true,
+        "stages": [
+          "preprocessing",
+          "audio_encoder",
+          "tts_engine",
+          "vocoder"
+        ],
+        "entry_stage": "preprocessing",
+        "total_requests": 0,
+        "pending_completions": 0,
+        "request_states": {}
+      },
+      "cache_audio_count": 1,
+      "cache_transcript_count": 1,
+      "active_tts_jobs": 0,
+      "tts_jobs": {
+        "queued": 0,
+        "running": 0,
+        "succeeded": 11,
+        "failed": 0
+      },
+      "max_concurrent_chunks": 96,
+      "short_reserved_chunks": 4,
+      "long_concurrent_chunks": 92,
+      "short_request_max_chars": 1000,
+      "short_request_max_chunks": 4,
+      "max_in_flight_chunks_per_job": 10,
+      "max_burst_in_flight_chunks_per_job": 20,
+      "max_burst_active_jobs": 2,
+      "busy_backlog_chunks": 2000,
+      "outstanding_chunks": 0,
+      "lane_inflight": {
+        "short": 0,
+        "long": 0,
+        "default": 0
+      },
+      "lane_waiting": {
+        "short": 0,
+        "long": 0,
+        "default": 0
+      },
+      "job_ttl_seconds": 3600,
+      "streamed_job_ttl_seconds": 60
+    },
+    "reference_cache_before": {
+      "path": "/root/autodl-tmp/tts-cache/ref-audio/1672a0731fdd2dfc8a8ce4efc451892ce30e623f2c9a5684820667ec69fe3fbd.mp3",
+      "exists": true,
+      "bytes": 92830,
+      "sha256": "f5f702503b19eb0980467c8e9e395a7503a12f918bcf43cba1993fbe7fc08c80"
+    },
+    "reference_cache_after_warmup": {
+      "path": "/root/autodl-tmp/tts-cache/ref-audio/1672a0731fdd2dfc8a8ce4efc451892ce30e623f2c9a5684820667ec69fe3fbd.mp3",
+      "exists": true,
+      "bytes": 92830,
+      "sha256": "f5f702503b19eb0980467c8e9e395a7503a12f918bcf43cba1993fbe7fc08c80"
+    },
+    "reference_cache_after": {
+      "path": "/root/autodl-tmp/tts-cache/ref-audio/1672a0731fdd2dfc8a8ce4efc451892ce30e623f2c9a5684820667ec69fe3fbd.mp3",
+      "exists": true,
+      "bytes": 92830,
+      "sha256": "f5f702503b19eb0980467c8e9e395a7503a12f918bcf43cba1993fbe7fc08c80"
+    },
+    "sglang_before": {
+      "pid": 634728,
+      "cmdline": [
+        "/root/autodl-tmp/sglang-omni/.venv/bin/python3",
+        "/root/autodl-tmp/sglang-omni/.venv/bin/sgl-omni",
+        "serve",
+        "--model-path",
+        "/root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--allowed-local-media-path",
+        "/root/autodl-tmp/tts-cache",
+        "--stages.2.factory_args.server_args_overrides.attention_backend",
+        "triton",
+        "--model-name",
+        "bosonai/higgs-audio-v3-tts-4b",
+        "--stages.2.factory_args.prefill_coalesce_requests",
+        "16",
+        "--stages.2.factory_args.prefill_coalesce_wait_ms",
+        "60"
+      ],
+      "cmdline_sha256": "db56f7b99cd4adef35ff9c3e324da762d18c3bccae44a75dca5cfcd0a4229201",
+      "pythonpath": "/root/autodl-tmp/sglang-omni-prefill-gate-canary",
+      "source_root": "/root/autodl-tmp/sglang-omni-prefill-gate-canary",
+      "head": "df62e91a00d383e6f73ab9604386ffac6c520529",
+      "diff_sha256": "304eb276c6d3f19acbfa1bb32723f9c533b6d88be40a5f536cb83cf1ed9d097a",
+      "status_sha256": "abfbe6c8cdb655cfad3c9604dac169c3526bbd8b6b717f5cbd4337e3c12ac55c",
+      "process_started_unix": 1784528122.52,
+      "runtime_files": {
+        "sglang_omni/scheduling/omni_scheduler.py": {
+          "sha256": "ce0707c75ef193184b65af705192160ee25c694c13122bfd7e7733e5c026d6f3",
+          "mtime_unix": 1784480634.4345272
+        },
+        "sglang_omni/models/higgs_tts/stages.py": {
+          "sha256": "d5b8ae1fe4b7a34baacd294779a8a9fa0711a58fe27bc25b725a67fa513a73b9",
+          "mtime_unix": 1784480634.4345272
+        }
+      },
+      "model": {
+        "path": "/root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "snapshot_revision": "a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "public_name": "bosonai/higgs-audio-v3-tts-4b",
+        "symlink_manifest_sha256": "a06349c4ee441d5af92e01691108332ef9910db3532c335c97d10247a213c2e0",
+        "files": {
+          "model.safetensors": {
+            "link": "../../blobs/2f7965264c360b38180885006944aa16bd1de20f4e6cff79f6473bfcf8ae3d5a",
+            "bytes": 9309834930
+          },
+          "config.json": {
+            "link": "../../blobs/fb8848872136814c75ee10055d83ecc38f5f0169",
+            "bytes": 2755
+          },
+          "model.safetensors.index.json": {
+            "link": "../../blobs/6f55f418d83cc485a7f7f116b919df88c3148138",
+            "bytes": 90103
+          },
+          "tokenizer.json": {
+            "link": "../../blobs/eb883de2de5adc5113f1f02b54830a0ea7cd6ef191cde65c41aceb3737d4d1c1",
+            "bytes": 11433924
+          },
+          "tokenizer_config.json": {
+            "link": "../../blobs/cfbe88c0bb630370fce5c497550b00a5b3608edc",
+            "bytes": 1937
+          },
+          "chat_template.jinja": {
+            "link": "../../blobs/28028c056af412405debd878cdda0171e35fa5d1",
+            "bytes": 2427
+          }
+        }
+      },
+      "model_environment": {
+        "MODEL_PATH": "/root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1"
+      },
+      "benchmark_arm": "candidate",
+      "prefill_gate_cli_present": true,
+      "coalesce_requests": 16,
+      "coalesce_wait_ms": 60.0
+    },
+    "sglang_after": {
+      "pid": 634728,
+      "cmdline": [
+        "/root/autodl-tmp/sglang-omni/.venv/bin/python3",
+        "/root/autodl-tmp/sglang-omni/.venv/bin/sgl-omni",
+        "serve",
+        "--model-path",
+        "/root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--allowed-local-media-path",
+        "/root/autodl-tmp/tts-cache",
+        "--stages.2.factory_args.server_args_overrides.attention_backend",
+        "triton",
+        "--model-name",
+        "bosonai/higgs-audio-v3-tts-4b",
+        "--stages.2.factory_args.prefill_coalesce_requests",
+        "16",
+        "--stages.2.factory_args.prefill_coalesce_wait_ms",
+        "60"
+      ],
+      "cmdline_sha256": "db56f7b99cd4adef35ff9c3e324da762d18c3bccae44a75dca5cfcd0a4229201",
+      "pythonpath": "/root/autodl-tmp/sglang-omni-prefill-gate-canary",
+      "source_root": "/root/autodl-tmp/sglang-omni-prefill-gate-canary",
+      "head": "df62e91a00d383e6f73ab9604386ffac6c520529",
+      "diff_sha256": "304eb276c6d3f19acbfa1bb32723f9c533b6d88be40a5f536cb83cf1ed9d097a",
+      "status_sha256": "abfbe6c8cdb655cfad3c9604dac169c3526bbd8b6b717f5cbd4337e3c12ac55c",
+      "process_started_unix": 1784528122.52,
+      "runtime_files": {
+        "sglang_omni/scheduling/omni_scheduler.py": {
+          "sha256": "ce0707c75ef193184b65af705192160ee25c694c13122bfd7e7733e5c026d6f3",
+          "mtime_unix": 1784480634.4345272
+        },
+        "sglang_omni/models/higgs_tts/stages.py": {
+          "sha256": "d5b8ae1fe4b7a34baacd294779a8a9fa0711a58fe27bc25b725a67fa513a73b9",
+          "mtime_unix": 1784480634.4345272
+        }
+      },
+      "model": {
+        "path": "/root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "snapshot_revision": "a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "public_name": "bosonai/higgs-audio-v3-tts-4b",
+        "symlink_manifest_sha256": "a06349c4ee441d5af92e01691108332ef9910db3532c335c97d10247a213c2e0",
+        "files": {
+          "model.safetensors": {
+            "link": "../../blobs/2f7965264c360b38180885006944aa16bd1de20f4e6cff79f6473bfcf8ae3d5a",
+            "bytes": 9309834930
+          },
+          "config.json": {
+            "link": "../../blobs/fb8848872136814c75ee10055d83ecc38f5f0169",
+            "bytes": 2755
+          },
+          "model.safetensors.index.json": {
+            "link": "../../blobs/6f55f418d83cc485a7f7f116b919df88c3148138",
+            "bytes": 90103
+          },
+          "tokenizer.json": {
+            "link": "../../blobs/eb883de2de5adc5113f1f02b54830a0ea7cd6ef191cde65c41aceb3737d4d1c1",
+            "bytes": 11433924
+          },
+          "tokenizer_config.json": {
+            "link": "../../blobs/cfbe88c0bb630370fce5c497550b00a5b3608edc",
+            "bytes": 1937
+          },
+          "chat_template.jinja": {
+            "link": "../../blobs/28028c056af412405debd878cdda0171e35fa5d1",
+            "bytes": 2427
+          }
+        }
+      },
+      "model_environment": {
+        "MODEL_PATH": "/root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1"
+      },
+      "benchmark_arm": "candidate",
+      "prefill_gate_cli_present": true,
+      "coalesce_requests": 16,
+      "coalesce_wait_ms": 60.0
+    },
+    "errors": []
+  },
+  "resources_all_runs": {
+    "samples": 184,
+    "sampling_interval_s": 0.1,
+    "api_rss_kb": {
+      "n": 184,
+      "min": 84544.0,
+      "mean": 84559.60869565218,
+      "p50": 84564.0,
+      "p95": 84564.0,
+      "p99": 84568.0,
+      "max": 84568.0
+    },
+    "gpu_util_pct": {
+      "n": 184,
+      "min": 0.0,
+      "mean": 68.52717391304348,
+      "p50": 76.0,
+      "p95": 93.0,
+      "p99": 94.0,
+      "max": 94.0
+    },
+    "gpu_memory_used_mib": {
+      "n": 184,
+      "min": 83417.0,
+      "mean": 83582.59782608696,
+      "p50": 83591.0,
+      "p95": 83591.0,
+      "p99": 83591.0,
+      "max": 83591.0
+    },
+    "gpu_power_w": {
+      "n": 184,
+      "min": 83.11,
+      "mean": 243.23092391304345,
+      "p50": 255.525,
+      "p95": 291.516,
+      "p99": 298.3578,
+      "max": 301.89
+    }
+  },
+  "valid": true
+}
