@@ -42,7 +42,7 @@ expected = [
     b"--host",
     b"127.0.0.1",
     b"--port",
-    b"6007",
+    b"16007",
 ]
 for cmdline_path in Path("/proc").glob("[0-9]*/cmdline"):
     try:

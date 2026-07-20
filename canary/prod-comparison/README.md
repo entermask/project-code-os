@@ -15,7 +15,7 @@ The comparison uses four named arms:
 
 `../sglang-prefill-gate/benchmark/benchmark.py` accepts
 `PREFILL_BENCH_ARM=candidate` (default) or
-`PREFILL_BENCH_ARM=prod-clone`. The latter is pinned to loopback port 6007,
+`PREFILL_BENCH_ARM=prod-clone`. The latter is pinned to loopback port 16007,
 bridge SHA `328851b1...`, SGLang diff `9a3ba2d6...`, feed 10 and a separate
 cache under the allowed media root. The candidate remains pinned to port 6006, bridge SHA `00f37e06...`,
 SGLang diff `304eb276...` and burst 20. Both arms reject source, CLI, cache,

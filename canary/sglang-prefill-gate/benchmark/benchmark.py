@@ -224,8 +224,8 @@ if BENCH_ARM == "candidate":
         "TTS_CACHE_DIR": "/root/autodl-tmp/tts-cache",
     })
 elif BENCH_ARM == "prod-clone":
-    BASE_URL = "http://127.0.0.1:6007"
-    API_PORT = 6007
+    BASE_URL = "http://127.0.0.1:16007"
+    API_PORT = 16007
     API_HOST = "127.0.0.1"
     API_LOG = Path("/root/autodl-tmp/prod-compare/logs/prod_clone_api.log")
     BRIDGE_SOURCE = Path("/root/autodl-tmp/Fish-Audio/prod-current/app.py")

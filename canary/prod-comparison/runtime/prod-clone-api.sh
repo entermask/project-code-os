@@ -48,4 +48,4 @@ exec env -i \
   CHUNK_MIN_BYTES=512 \
   FFMPEG_BIN=ffmpeg \
   LOG_LEVEL=INFO \
-  "$VENV_ROOT/bin/uvicorn" app:app --host 127.0.0.1 --port 6007
+  "$VENV_ROOT/bin/uvicorn" app:app --host 127.0.0.1 --port 16007
