@@ -10,6 +10,7 @@ fi
 RUNTIME_ROOT=/root/autodl-tmp/prod-compare/runtime
 SUPERVISOR_CONF=/root/autodl-tmp/prod-sim/supervisord.conf
 SUPERVISORCTL=/usr/bin/supervisorctl
+PYTHON=/root/autodl-tmp/Fish-Audio/.venv/bin/python3
 ACTIVE_LAUNCHER=/root/autodl-tmp/prod-sim/higgs-sglang-prod-sim.sh
 ACTIVE_GATE_ENV=/root/autodl-tmp/prod-sim/prefill-gate.env
 ROLLBACK_ROOT=/root/autodl-tmp/prod-compare/rollback
@@ -35,7 +36,7 @@ if pgrep -f "/uvicorn app:app --host 127.0.0.1 --port 6007" >/dev/null; then
   echo "stop prod_clone_api before switching SGLang" >&2
   exit 2
 fi
-/usr/bin/python3 -c '
+"$PYTHON" -c '
 import json
 import urllib.request
 
@@ -101,7 +102,7 @@ wait_port_free() {
   local deadline=$((SECONDS + 240))
   while (( SECONDS < deadline )); do
     if ! pgrep -f "sgl-omni serve" >/dev/null \
-      && /usr/bin/python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 8000)); s.close()' 2>/dev/null; then
+      && "$PYTHON" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 8000)); s.close()' 2>/dev/null; then
       return 0
     fi
     sleep 1
@@ -201,7 +202,7 @@ verify_active() {
     fi
   fi
   curl -fsS --max-time 10 http://127.0.0.1:8000/v1/models \
-    | /usr/bin/python3 -c 'import json, sys; data=json.load(sys.stdin); assert data["data"][0]["id"] == "bosonai/higgs-audio-v3-tts-4b"'
+    | "$PYTHON" -c 'import json, sys; data=json.load(sys.stdin); assert data["data"][0]["id"] == "bosonai/higgs-audio-v3-tts-4b"'
 }
 
 restore_previous() {
