@@ -32,10 +32,26 @@ if [[ -e "$DIRTY_SENTINEL" ]]; then
   echo "refusing switch while benchmark dirty sentinel exists: $DIRTY_SENTINEL" >&2
   exit 2
 fi
-if pgrep -f "/uvicorn app:app --host 127.0.0.1 --port 6007" >/dev/null; then
-  echo "stop prod_clone_api before switching SGLang" >&2
-  exit 2
-fi
+"$PYTHON" -c '
+from pathlib import Path
+
+expected = [
+    b"/root/autodl-tmp/Fish-Audio/.venv/bin/python3",
+    b"/root/autodl-tmp/Fish-Audio/.venv/bin/uvicorn",
+    b"app:app",
+    b"--host",
+    b"127.0.0.1",
+    b"--port",
+    b"6007",
+]
+for cmdline_path in Path("/proc").glob("[0-9]*/cmdline"):
+    try:
+        cmdline = [item for item in cmdline_path.read_bytes().split(b"\0") if item]
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        continue
+    if cmdline == expected:
+        raise SystemExit("stop prod_clone_api before switching SGLang")
+'
 "$PYTHON" -c '
 import json
 import urllib.request
