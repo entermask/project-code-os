@@ -41,10 +41,6 @@ unset HIGGS_VOCODER_CANARY_FADE_CURVE
 
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="$SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
-export CUDA_HOME="$VENV_ROOT/.venv/lib/python3.12/site-packages/nvidia/cu13"
-export PATH="$CUDA_HOME/bin:$PATH"
-CCCL_INCLUDE="$VENV_ROOT/.venv/lib/python3.12/site-packages/flashinfer/data/cccl/libcudacxx/include"
-export CPATH="$CCCL_INCLUDE${CPATH:+:$CPATH}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-/root/.cache/huggingface/hub}"
 export FLASHINFER_USE_CUDA_NORM="${FLASHINFER_USE_CUDA_NORM:-0}"
 
