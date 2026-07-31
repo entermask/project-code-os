@@ -151,6 +151,18 @@ HIGGS_TEMPERATURE = float(os.getenv("HIGGS_TEMPERATURE", "0.8"))
 _HIGGS_TOP_P_ENV = os.getenv("HIGGS_TOP_P", "").strip()
 HIGGS_TOP_P: Optional[float] = float(_HIGGS_TOP_P_ENV) if _HIGGS_TOP_P_ENV else None
 HIGGS_TOP_K = int(os.getenv("HIGGS_TOP_K", "50"))
+# Phụ âm/âm tiết đầu bị nuốt: model thỉnh thoảng vào thẳng frame 0 (không chừa
+# frame im lặng nào) → âm mở đầu không có chỗ đặt closure, nghe mất chữ ("đáng
+# đời" → "áng đời"). Đo trên prod: 29% chunk_00000 có onset 0ms; theo từng câu tỉ
+# lệ 0-100% (không theo lớp phụ âm — "ông" 80%, "anh" 0%). Prefix token prosody
+# CHÍNH THỨC của v3 (id 151722, có trong tokenizer) ép model sinh lặng thật:
+# gate 100 mẫu qua 6 câu → 0/100 vào frame 0, đổi lại ~12 token (~3.5%) mỗi chunk.
+# Lặng thừa được cắt lại ở _trim_lead_silence. Mặc định TẮT.
+HIGGS_PAUSE_PREFIX = os.getenv("HIGGS_PAUSE_PREFIX", "0").strip().lower() in ("1", "true", "yes", "on")
+_PAUSE_PREFIX_TOKEN = "<|prosody:pause|>"
+# Giữ lại bấy nhiêu ms im lặng đầu sau khi cắt. 0 = tắt cắt.
+LEAD_SILENCE_KEEP_MS = max(0, int(os.getenv("LEAD_SILENCE_KEEP_MS", "60")))
+LEAD_SILENCE_DBFS = float(os.getenv("LEAD_SILENCE_DBFS", "-45"))
 # Natural/multi-turn: ground each chunk on the last N seconds of audio already
 # produced in this job (audio only, NO text — empirically cleaner). The window
 # spans chunk boundaries, so a tiny prior chunk ("OK.") auto-merges with the one
@@ -1380,7 +1392,7 @@ def _sglang_payload(
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "input": chunk_text,
+        "input": (_PAUSE_PREFIX_TOKEN + chunk_text) if HIGGS_PAUSE_PREFIX else chunk_text,
         # Multi-turn keeps chunks as WAV internally so the rolling context window
         # can be concatenated/trimmed losslessly; output is re-encoded later.
         "response_format": "wav" if (req.multi_turn or req.af_filter) else req.format,
@@ -1501,6 +1513,54 @@ def _wav_peak_dbfs(audio_bytes: bytes) -> Optional[float]:
     return 20.0 * math.log10(peak / 32768.0)
 
 
+def _trim_lead_silence(wav_bytes: bytes) -> bytes:
+    """Cắt bớt im lặng đầu do HIGGS_PAUSE_PREFIX sinh ra, GIỮ LEAD_SILENCE_KEEP_MS.
+
+    An toàn tuyệt đối theo thiết kế: chỉ cắt tối đa (onset − keep), nên không bao
+    giờ chạm vào speech; onset < keep (kể cả 0) → trả nguyên bản. Quét bằng cửa sổ
+    5ms, mono s16 (định dạng SGLang trả về); format khác → no-op.
+    """
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as reader:
+            if reader.getnchannels() != 1 or reader.getsampwidth() != 2:
+                return wav_bytes
+            sample_rate = reader.getframerate()
+            frames = reader.readframes(reader.getnframes())
+    except (EOFError, OSError, wave.Error):
+        return wav_bytes
+
+    window = max(2, int(sample_rate * 0.005) * 2)
+    threshold = 32768.0 * (10.0 ** (LEAD_SILENCE_DBFS / 20.0))
+    onset_bytes = None
+    for offset in range(0, len(frames) - window, window):
+        chunk = frames[offset : offset + window]
+        if PCM_STATS_AUDIOOP in ("peak", "all"):
+            assert _audioop is not None
+            peak = _audioop.max(chunk, 2)
+        else:
+            samples = array.array("h")
+            samples.frombytes(chunk)
+            peak = max(max(samples), -min(samples)) if samples else 0
+        if peak > threshold:
+            onset_bytes = offset
+            break
+    if onset_bytes is None:
+        return wav_bytes
+
+    keep_bytes = int(sample_rate * LEAD_SILENCE_KEEP_MS / 1000) * 2
+    cut_bytes = onset_bytes - keep_bytes
+    if cut_bytes <= 0:
+        return wav_bytes
+
+    out = io.BytesIO()
+    with wave.open(out, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(sample_rate)
+        writer.writeframes(frames[cut_bytes:])
+    return out.getvalue()
+
+
 async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
     """Peak dBFS: PCM WAV native; format khác fallback ffmpeg volumedetect."""
     if not audio_bytes:
@@ -1557,6 +1617,9 @@ async def _call_sglang(
     audio_bytes = _unwrap_sglang_audio(response.content)
     if not audio_bytes:
         raise RuntimeError("SGLang returned empty audio.")
+
+    if HIGGS_PAUSE_PREFIX and LEAD_SILENCE_KEEP_MS and _is_wav(audio_bytes):
+        audio_bytes = _trim_lead_silence(audio_bytes)
 
     result = ChunkResult(
         audio_bytes=audio_bytes,

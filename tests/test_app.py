@@ -1560,3 +1560,78 @@ def test_pcm_stats_env_gia_tri_sai_fail_fast_luc_import(api, monkeypatch):
     # Trả module về trạng thái lành cho các test sau.
     monkeypatch.setenv("HIGGS_PCM_STATS_AUDIOOP", "0")
     importlib.reload(api)
+
+
+# --- Pause prefix + cắt im lặng đầu (HIGGS_PAUSE_PREFIX, mặc định off) ---
+
+
+def wav_with_lead_silence(silence_ms: int, tone_ms: int = 300, rate: int = 24000) -> bytes:
+    buf = BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(b"\x00\x00" * int(rate * silence_ms / 1000))
+        sample = struct.pack("<h", 20000) + struct.pack("<h", -20000)
+        wav.writeframes(sample * int(rate * tone_ms / 1000 / 2))
+    return buf.getvalue()
+
+
+def wav_duration_ms(data: bytes) -> float:
+    with wave.open(BytesIO(data), "rb") as reader:
+        return reader.getnframes() / reader.getframerate() * 1000
+
+
+def test_pause_prefix_tat_giu_nguyen_payload_va_audio(api):
+    assert api.HIGGS_PAUSE_PREFIX is False
+    ref = api.ReferenceCacheEntry(audio_path=api.Path("/tmp/ref.wav"), transcript="ref", audio_cache_hit=True)
+    req = api.TTSRequest(chunks=["xin chào"], ref_audio_url="http://x/r.wav", ref_text="ref")
+    payload = api._sglang_payload("xin chào", req, ref)
+    assert payload["input"] == "xin chào"
+    assert wav_duration_ms(wav_with_lead_silence(500)) == pytest.approx(800, abs=1)
+
+
+def test_pause_prefix_bat_them_dung_token_prosody(api, monkeypatch):
+    monkeypatch.setenv("HIGGS_PAUSE_PREFIX", "1")
+    api = importlib.reload(api)
+    assert api.HIGGS_PAUSE_PREFIX is True
+    ref = api.ReferenceCacheEntry(audio_path=api.Path("/tmp/ref.wav"), transcript="ref", audio_cache_hit=True)
+    req = api.TTSRequest(chunks=["xin chào"], ref_audio_url="http://x/r.wav", ref_text="ref")
+    payload = api._sglang_payload("xin chào", req, ref)
+    assert payload["input"] == "<|prosody:pause|>xin chào"
+
+
+def test_trim_lead_silence_giu_dung_60ms(api):
+    trimmed = api._trim_lead_silence(wav_with_lead_silence(500))
+    # 500ms lặng + 300ms tone → cắt còn 60ms lặng + 300ms tone.
+    assert wav_duration_ms(trimmed) == pytest.approx(360, abs=6)
+
+
+def test_trim_lead_silence_khong_cat_khi_lang_ngan_hon_nguong(api):
+    # onset 30ms < keep 60ms → phải trả NGUYÊN BẢN, không được cắt vào speech.
+    data = wav_with_lead_silence(30)
+    assert api._trim_lead_silence(data) == data
+    # onset 0ms (đúng ca lỗi) cũng phải no-op.
+    data0 = wav_with_lead_silence(0)
+    assert api._trim_lead_silence(data0) == data0
+
+
+def test_trim_lead_silence_khong_bao_gio_cat_vao_speech(api):
+    for silence_ms in (0, 20, 60, 61, 120, 500, 1200):
+        data = wav_with_lead_silence(silence_ms)
+        trimmed = api._trim_lead_silence(data)
+        keep = min(silence_ms, 60)
+        # Phần tone (300ms) luôn còn nguyên; chỉ phần lặng bị cắt bớt.
+        assert wav_duration_ms(trimmed) == pytest.approx(300 + keep, abs=6), silence_ms
+
+
+def test_trim_lead_silence_bo_qua_dinh_dang_la(api):
+    assert api._trim_lead_silence(b"ID3-not-a-wav") == b"ID3-not-a-wav"
+    stereo = BytesIO()
+    with wave.open(stereo, "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b"\x00\x00\x00\x00" * 2400)
+    data = stereo.getvalue()
+    assert api._trim_lead_silence(data) == data
