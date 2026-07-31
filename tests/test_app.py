@@ -58,6 +58,9 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setenv("API_TOKEN", "test-token")
     monkeypatch.setenv("TTS_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("SGLANG_BASE_URL", "http://sglang.test")
+    monkeypatch.delenv("HIGGS_FFMPEG_TIMING", raising=False)
+    monkeypatch.delenv("HIGGS_LANE_ADMISSION_MODE", raising=False)
+    monkeypatch.delenv("HIGGS_PCM_STATS_AUDIOOP", raising=False)
     monkeypatch.setenv("BUSY_BACKLOG_CHUNKS", "8")
     monkeypatch.setenv("MAX_CONCURRENT_CHUNKS", "2")
     # Audio test tổng hợp rất nhỏ (~364B); tắt ngưỡng min-bytes để không bị coi là chunk hỏng.
@@ -551,6 +554,306 @@ def test_active_job_count_is_lane_local(api):
     assert api._active_same_lane_job_count("short") == 1
 
 
+def test_lane_admission_defaults_to_existing_dual_mode(api):
+    assert api.LANE_ADMISSION_MODE == "dual"
+    assert api.lane_admission_inflight == {
+        "dual_default": 0,
+        "dual_short_reserved": 0,
+        "dual_long": 0,
+        "unified": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dual_mode_keeps_long_out_of_idle_short_reserve(api, monkeypatch):
+    monkeypatch.setattr(api, "LANE_ADMISSION_MODE", "dual")
+    monkeypatch.setattr(api, "SHORT_RESERVED_CHUNKS", 1)
+    monkeypatch.setattr(api, "chunk_semaphore", asyncio.Semaphore(3))
+    monkeypatch.setattr(api, "short_chunk_semaphore", asyncio.Semaphore(1))
+    monkeypatch.setattr(api, "long_chunk_semaphore", asyncio.Semaphore(2))
+
+    first = await api._acquire_lane_slot("long")
+    second = await api._acquire_lane_slot("long")
+    blocked_long = asyncio.create_task(api._acquire_lane_slot("long"))
+    await asyncio.sleep(0)
+    assert not blocked_long.done()
+
+    short = await api._acquire_lane_slot("short")
+    assert short.pool == "dual_short_reserved"
+    assert short.semaphore is api.short_chunk_semaphore
+    short.semaphore.release()
+
+    first.semaphore.release()
+    third = await asyncio.wait_for(blocked_long, timeout=0.1)
+    assert third.pool == "dual_long"
+    second.semaphore.release()
+    third.semaphore.release()
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_long_uses_full_capacity_without_short_waiters(api):
+    controller = api.SoftReservedLaneAdmission(capacity=3, short_reserve=1)
+    assert [await controller.acquire("long") for _ in range(3)] == [
+        "unified",
+        "unified",
+        "unified",
+    ]
+    snapshot = await controller.snapshot()
+    assert snapshot["inflight_total"] == 3
+    assert snapshot["inflight_by_lane"]["long"] == 3
+    assert snapshot["waiting_by_lane"]["short"] == 0
+    for _ in range(3):
+        await controller.release("long")
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_short_takes_any_freed_slot_without_stranding(api):
+    controller = api.SoftReservedLaneAdmission(capacity=2, short_reserve=1)
+    await controller.acquire("long")
+    await controller.acquire("long")
+
+    short_waiters = [
+        asyncio.create_task(controller.acquire("short"))
+        for _ in range(2)
+    ]
+    await asyncio.sleep(0)
+    snapshot = await controller.snapshot()
+    assert snapshot["waiting_by_lane"]["short"] == 2
+
+    await controller.release("long")
+    assert await asyncio.wait_for(short_waiters[0], timeout=0.1) == "unified"
+    await controller.release("long")
+    assert await asyncio.wait_for(short_waiters[1], timeout=0.1) == "unified"
+
+    snapshot = await controller.snapshot()
+    assert snapshot["inflight_total"] == 2
+    assert snapshot["inflight_by_lane"]["short"] == 2
+    assert snapshot["waiting_by_lane"]["short"] == 0
+    await controller.release("short")
+    await controller.release("short")
+
+
+@pytest.mark.asyncio
+async def test_soft_reservation_restores_short_minimum_before_global_fifo(api):
+    controller = api.SoftReservedLaneAdmission(capacity=2, short_reserve=1)
+    await controller.acquire("long")
+    await controller.acquire("long")
+    older_long = asyncio.create_task(controller.acquire("long"))
+    younger_short = asyncio.create_task(controller.acquire("short"))
+    await asyncio.sleep(0)
+
+    await controller.release("long")
+    assert await asyncio.wait_for(younger_short, timeout=0.1) == "unified"
+    assert not older_long.done()
+
+    await controller.release("long")
+    assert await asyncio.wait_for(older_long, timeout=0.1) == "unified"
+    await controller.release("short")
+    await controller.release("long")
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_global_fifo_prefers_older_long_once_reserve_met(api):
+    controller = api.SoftReservedLaneAdmission(capacity=2, short_reserve=1)
+    await controller.acquire("short")
+    await controller.acquire("long")
+    older_long = asyncio.create_task(controller.acquire("long"))
+    await asyncio.sleep(0)
+    younger_short = asyncio.create_task(controller.acquire("short"))
+    await asyncio.sleep(0)
+
+    # Short inflight (1) đã đủ reserve (1) → cả hai queue non-empty đi theo FIFO
+    # toàn cục: long GIÀ hơn phải thắng short trẻ hơn, không còn ưu tiên short.
+    await controller.release("long")
+    assert await asyncio.wait_for(older_long, timeout=0.1) == "unified"
+    assert not younger_short.done()
+
+    await controller.release("long")
+    assert await asyncio.wait_for(younger_short, timeout=0.1) == "unified"
+    await controller.release("short")
+    await controller.release("short")
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_global_fifo_prefers_older_short_once_reserve_met(api):
+    controller = api.SoftReservedLaneAdmission(capacity=2, short_reserve=1)
+    await controller.acquire("short")
+    await controller.acquire("long")
+    older_short = asyncio.create_task(controller.acquire("short"))
+    await asyncio.sleep(0)
+    younger_long = asyncio.create_task(controller.acquire("long"))
+    await asyncio.sleep(0)
+
+    # Chiều ngược lại của FIFO: short GIÀ hơn thắng long trẻ hơn theo sequence,
+    # không phải vì reserve (reserve đã đầy từ trước).
+    await controller.release("long")
+    assert await asyncio.wait_for(older_short, timeout=0.1) == "unified"
+    assert not younger_long.done()
+
+    await controller.release("short")
+    assert await asyncio.wait_for(younger_long, timeout=0.1) == "unified"
+    await controller.release("short")
+    await controller.release("long")
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_cancelled_waiter_does_not_leak_capacity(api):
+    controller = api.SoftReservedLaneAdmission(capacity=1, short_reserve=1)
+    await controller.acquire("long")
+    short = asyncio.create_task(controller.acquire("short"))
+    await asyncio.sleep(0)
+    short.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await short
+
+    snapshot = await controller.snapshot()
+    assert snapshot["inflight_total"] == 1
+    assert snapshot["waiting_by_lane"]["short"] == 0
+    await controller.release("long")
+    assert await asyncio.wait_for(controller.acquire("long"), timeout=0.1) == "unified"
+    await controller.release("long")
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_cancel_after_grant_returns_permit(api):
+    controller = api.SoftReservedLaneAdmission(capacity=1, short_reserve=1)
+    await controller.acquire("long")
+    waiter = asyncio.create_task(controller.acquire("short"))
+    await asyncio.sleep(0)
+
+    # release() grant future của waiter ĐỒNG BỘ dưới lock (granted=True) nhưng
+    # task chưa kịp resume khỏi shield(future); cancel rơi đúng khe đó phải đi
+    # qua nhánh granted của _cancel_waiter và trả permit về pool.
+    await controller.release("long")
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    snapshot = await controller.snapshot()
+    assert snapshot["inflight_total"] == 0
+    assert snapshot["inflight_by_lane"]["short"] == 0
+    assert snapshot["waiting_by_lane"]["short"] == 0
+    assert await asyncio.wait_for(controller.acquire("long"), timeout=0.1) == "unified"
+    await controller.release("long")
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_lane_slot_updates_requested_and_physical_gauges(
+    api, monkeypatch
+):
+    controller = api.SoftReservedLaneAdmission(capacity=2, short_reserve=1)
+    monkeypatch.setattr(api, "LANE_ADMISSION_MODE", "soft_reserved")
+    monkeypatch.setattr(api, "SHORT_RESERVED_CHUNKS", 1)
+    monkeypatch.setattr(api, "soft_reserved_lane_admission", controller)
+    for gauge in (api.lane_inflight, api.lane_waiting):
+        gauge.update({"short": 0, "long": 0, "default": 0})
+    api.lane_admission_inflight.update(
+        {
+            "dual_default": 0,
+            "dual_short_reserved": 0,
+            "dual_long": 0,
+            "unified": 0,
+        }
+    )
+
+    async with api._lane_slot("long"):
+        assert api.lane_inflight["long"] == 1
+        assert api.lane_waiting["long"] == 0
+        assert api.lane_admission_inflight["unified"] == 1
+        assert (await controller.snapshot())["inflight_total"] == 1
+
+    assert api.lane_inflight["long"] == 0
+    assert api.lane_admission_inflight["unified"] == 0
+    assert (await controller.snapshot())["inflight_total"] == 0
+
+    async def healthy():
+        return True, {"status": "ok"}
+
+    monkeypatch.setattr(api, "_sglang_health", healthy)
+    health = await api.health()
+    assert health["lane_admission_mode"] == "soft_reserved"
+    assert health["max_concurrent_chunks"] == 2
+    assert health["long_concurrent_chunks"] == 2
+    assert health["lane_admission_inflight"]["unified"] == 0
+    assert health["soft_reserved_lane_admission"]["short_reserve"] == 1
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_lane_slot_releases_when_holder_is_cancelled(
+    api, monkeypatch
+):
+    controller = api.SoftReservedLaneAdmission(capacity=1, short_reserve=1)
+    monkeypatch.setattr(api, "LANE_ADMISSION_MODE", "soft_reserved")
+    monkeypatch.setattr(api, "soft_reserved_lane_admission", controller)
+    entered = asyncio.Event()
+
+    async def holder():
+        async with api._lane_slot("long"):
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(holder())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    snapshot = await controller.snapshot()
+    assert snapshot["inflight_total"] == 0
+    assert snapshot["inflight_by_lane"]["long"] == 0
+    assert api.lane_inflight["long"] == 0
+    assert api.lane_admission_inflight["unified"] == 0
+
+
+@pytest.mark.asyncio
+async def test_soft_reserved_release_resists_cancellation_while_waiting_for_lock(
+    api, monkeypatch
+):
+    controller = api.SoftReservedLaneAdmission(capacity=1, short_reserve=1)
+    monkeypatch.setattr(api, "LANE_ADMISSION_MODE", "soft_reserved")
+    monkeypatch.setattr(api, "soft_reserved_lane_admission", controller)
+    entered = asyncio.Event()
+    leave_body = asyncio.Event()
+
+    async def holder():
+        async with api._lane_slot("long"):
+            entered.set()
+            await leave_body.wait()
+
+    task = asyncio.create_task(holder())
+    await entered.wait()
+    await controller._lock.acquire()
+    try:
+        # Let the body finish normally, then cancel precisely while the async
+        # controller release is blocked on its lock.
+        leave_body.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if api.lane_admission_inflight["unified"] == 0:
+                break
+        assert api.lane_inflight["long"] == 0
+        assert api.lane_admission_inflight["unified"] == 0
+        assert not task.done()
+
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()  # repeated cancellation must not interrupt permit return
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        controller._lock.release()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    snapshot = await controller.snapshot()
+    assert snapshot["inflight_total"] == 0
+    assert snapshot["inflight_by_lane"]["long"] == 0
+    assert snapshot["waiting_by_lane"]["long"] == 0
+    assert await asyncio.wait_for(controller.acquire("long"), timeout=0.1) == "unified"
+    await controller.release("long")
+
+
 @pytest.mark.asyncio
 async def test_job_permit_keeps_mp3_postprocess_backpressure(api, tmp_path, monkeypatch):
     api.outstanding_chunks = 2
@@ -1025,3 +1328,235 @@ async def test_shared_loudnorm_chunk_binh_thuong_khong_rescue(api, monkeypatch):
     assert af1 == af2 and "volume=14.40dB" in af1  # cùng mức → cùng shared gain
     assert len(calls) == 1  # không đo thêm cho chunk bình thường
     api.jobs.pop("job-ln-norescue", None)
+
+
+# --- Opt-in FFmpeg timing telemetry (test/canary only; default-off) ---
+
+
+async def _healthy_sglang():
+    return True, {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_timing_is_absent_from_health_by_default(api, monkeypatch):
+    monkeypatch.setattr(api, "_sglang_health", _healthy_sglang)
+    assert api.FFMPEG_TIMING_ENABLED is False
+    payload = await api.health()
+    assert "ffmpeg_timing" not in payload
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_timing_tracks_success_and_exposes_health(api, monkeypatch):
+    monkeypatch.setenv("HIGGS_FFMPEG_TIMING", "1")
+    api = importlib.reload(api)
+    assert api.FFMPEG_TIMING_ENABLED is True
+    monkeypatch.setattr(api, "_sglang_health", _healthy_sglang)
+    monkeypatch.setattr(api.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    loudnorm_json = (
+        b'{"input_i":"-20.0","input_tp":"-5.0","input_lra":"3.0",'
+        b'"input_thresh":"-30.0","target_offset":"0.1"}'
+    )
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, stdout=b"", stderr=b""):
+            self.stdout = stdout
+            self.stderr = stderr
+
+        async def communicate(self, _audio):
+            return self.stdout, self.stderr
+
+    async def fake_spawn(*args, **_kwargs):
+        joined = " ".join(str(arg) for arg in args)
+        if "volumedetect" in args:
+            return FakeProcess(stderr=b"max_volume: -12.3 dB")
+        if "print_format=json" in joined:
+            return FakeProcess(stderr=loudnorm_json)
+        assert "libmp3lame" in args
+        return FakeProcess(stdout=b"ID3-timed-mp3")
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", fake_spawn)
+
+    assert await api._max_volume_dbfs(b"ID3-not-a-wav") == pytest.approx(-12.3)
+    measured = await api._measure_loudnorm(LN_AF, tone_wav_bytes())
+    assert measured is not None and measured["i"] == pytest.approx(-20.0)
+    encoded = await api._wav_to_mp3(tone_wav_bytes(), af="volume=0dB", af_final=True)
+    assert encoded == b"ID3-timed-mp3"
+
+    payload = await api.health()
+    timing = payload["ffmpeg_timing"]
+    assert set(timing) == {"measure", "encode", "peak_fallback"}
+    for counters in timing.values():
+        assert counters["calls"] == 1
+        assert counters["failures"] == 0
+        assert counters["in_flight"] == 0
+        assert counters["max_in_flight"] == 1
+        assert counters["queue_wait_s_total"] >= 0
+        assert counters["queue_wait_s_max"] >= 0
+        assert counters["service_s_total"] >= 0
+        assert counters["service_s_max"] >= 0
+    assert timing["peak_fallback"]["queue_wait_s_total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_timing_counts_nonzero_exit_failures(api, monkeypatch):
+    monkeypatch.setattr(api, "FFMPEG_TIMING_ENABLED", True)
+    monkeypatch.setattr(api.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    class FailedProcess:
+        returncode = 1
+
+        async def communicate(self, _audio):
+            return b"", b"ffmpeg failed"
+
+    async def failed_spawn(*_args, **_kwargs):
+        return FailedProcess()
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", failed_spawn)
+
+    assert await api._max_volume_dbfs(b"ID3-not-a-wav") is None
+    assert await api._measure_loudnorm(LN_AF, tone_wav_bytes()) is None
+    with pytest.raises(RuntimeError, match="ffmpeg failed to convert"):
+        await api._wav_to_mp3(tone_wav_bytes())
+
+    timing = api._ffmpeg_timing_snapshot()
+    for kind in ("measure", "encode", "peak_fallback"):
+        assert timing[kind]["calls"] == 1
+        assert timing[kind]["failures"] == 1
+        assert timing[kind]["in_flight"] == 0
+        assert timing[kind]["max_in_flight"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_timing_tracks_queue_and_concurrency(api, monkeypatch):
+    monkeypatch.setattr(api, "FFMPEG_TIMING_ENABLED", True)
+
+    # Bounded operation: second task must wait, so queue time is observable and
+    # max in-flight remains one.
+    semaphore = asyncio.Semaphore(1)
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def bounded(index):
+        async with api._timed_ffmpeg_operation("measure", semaphore):
+            if index == 0:
+                first_entered.set()
+                await release_first.wait()
+
+    first = asyncio.create_task(bounded(0))
+    await first_entered.wait()
+    second = asyncio.create_task(bounded(1))
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if api._ffmpeg_timing_snapshot()["measure"]["calls"] == 2:
+            break
+    await asyncio.sleep(0.01)
+    release_first.set()
+    await asyncio.gather(first, second)
+
+    measure = api._ffmpeg_timing_snapshot()["measure"]
+    assert measure["calls"] == 2
+    assert measure["failures"] == 0
+    assert measure["in_flight"] == 0
+    assert measure["max_in_flight"] == 1
+    assert measure["queue_wait_s_total"] > 0
+    assert measure["queue_wait_s_max"] > 0
+
+    # Unbounded operations may overlap; current/max counters must show both.
+    both_entered = asyncio.Event()
+    release_both = asyncio.Event()
+    entered = 0
+
+    async def unbounded():
+        nonlocal entered
+        async with api._timed_ffmpeg_operation("encode"):
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await release_both.wait()
+
+    tasks = [asyncio.create_task(unbounded()) for _ in range(2)]
+    await both_entered.wait()
+    encode_mid = api._ffmpeg_timing_snapshot()["encode"]
+    assert encode_mid["calls"] == 2
+    assert encode_mid["in_flight"] == 2
+    assert encode_mid["max_in_flight"] == 2
+    release_both.set()
+    await asyncio.gather(*tasks)
+    assert api._ffmpeg_timing_snapshot()["encode"]["in_flight"] == 0
+
+
+# --- Native PCM stats (HIGGS_PCM_STATS_AUDIOOP=all — mode chạy trên canary/prod) ---
+
+
+def pcm16_wav(samples: list[int]) -> bytes:
+    buf = BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"".join(struct.pack("<h", s) for s in samples))
+    return buf.getvalue()
+
+
+def test_pcm_audioop_all_peak_bit_exact_voi_python_loop(api, monkeypatch):
+    cases = [
+        [-32768, 32767, 0, -1],       # cực trị: abs(-32768)=32768 phải thắng 32767
+        [-32768] * 4,                 # toàn cực âm
+        [12345, -23456, 7],
+        [0, 0, 0],                    # câm → -inf ở cả hai mode
+        [1, -1],
+    ]
+    baseline = [api._wav_peak_dbfs(pcm16_wav(s)) for s in cases]
+
+    monkeypatch.setenv("HIGGS_PCM_STATS_AUDIOOP", "all")
+    api = importlib.reload(api)
+    assert api.PCM_STATS_AUDIOOP == "all"
+    for samples, expected in zip(cases, baseline):
+        assert api._wav_peak_dbfs(pcm16_wav(samples)) == expected
+
+
+def test_pcm_audioop_all_rms_truncation_la_hanh_vi_da_biet(api, monkeypatch):
+    speech = [30000, -30000] * 100    # mức speech: hai mode phải gần trùng
+    quiet = [1, 2]                    # int rms=1 (-90.31dB) vs float 1.581 (-86.33dB)
+    sub_one = [1, 0, 0, 0]            # float rms=0.5 nhưng int rms=0 → None ở mode all
+
+    rms_py_speech = api._wav_rms_dbfs(pcm16_wav(speech))
+    rms_py_quiet = api._wav_rms_dbfs(pcm16_wav(quiet))
+    assert rms_py_quiet == pytest.approx(-86.33, abs=0.01)
+    assert api._wav_rms_dbfs(pcm16_wav(sub_one)) == pytest.approx(-96.33, abs=0.01)
+
+    monkeypatch.setenv("HIGGS_PCM_STATS_AUDIOOP", "all")
+    api = importlib.reload(api)
+    # Speech-level: sai số integer-truncate không đáng kể (< 0.01 dB).
+    assert api._wav_rms_dbfs(pcm16_wav(speech)) == pytest.approx(rms_py_speech, abs=0.01)
+    # Gần silence floor: divergence ~4 dB và mất giá trị dưới 1 LSB là hành vi
+    # ĐÃ BIẾT của audioop.rms (REPORT-20260730) — pin lại để regression lộ ra ngay.
+    assert api._wav_rms_dbfs(pcm16_wav(quiet)) == pytest.approx(-90.31, abs=0.01)
+    assert api._wav_rms_dbfs(pcm16_wav(sub_one)) is None
+
+
+def test_pcm_audioop_peak_mode_giu_rms_tren_python_path(api, monkeypatch):
+    samples = [1, 2]
+    peak_py = api._wav_peak_dbfs(pcm16_wav(samples))
+    rms_py = api._wav_rms_dbfs(pcm16_wav(samples))
+
+    monkeypatch.setenv("HIGGS_PCM_STATS_AUDIOOP", "peak")
+    api = importlib.reload(api)
+    assert api.PCM_STATS_AUDIOOP == "peak"
+    assert api._wav_peak_dbfs(pcm16_wav(samples)) == peak_py
+    # Mode "peak" chỉ native hoá peak; RMS phải GIỮ NGUYÊN float Python path.
+    assert api._wav_rms_dbfs(pcm16_wav(samples)) == rms_py
+
+
+def test_pcm_stats_env_gia_tri_sai_fail_fast_luc_import(api, monkeypatch):
+    # "1" theo thói quen flag truthy bên cạnh KHÔNG hợp lệ — phải chết ngay lúc
+    # import thay vì âm thầm chạy Python path.
+    monkeypatch.setenv("HIGGS_PCM_STATS_AUDIOOP", "1")
+    with pytest.raises(RuntimeError, match="HIGGS_PCM_STATS_AUDIOOP"):
+        importlib.reload(api)
+    # Trả module về trạng thái lành cho các test sau.
+    monkeypatch.setenv("HIGGS_PCM_STATS_AUDIOOP", "0")
+    importlib.reload(api)

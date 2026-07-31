@@ -1,0 +1,12 @@
+config_cls: HiggsTtsPipelineConfig
+model_path: /root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581
+
+# Keep d957's native four-stage Higgs configuration and pin only the SGLang
+# engine defaults that define the established K16 comparison arm.
+runtime_overrides:
+  tts_engine:
+    server_args_overrides:
+      attention_backend: triton
+      page_size: 1
+      schedule_policy: fcfs
+      schedule_conservativeness: 1.0

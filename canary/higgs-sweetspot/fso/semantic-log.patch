@@ -1,0 +1,52 @@
+diff --git a/sglang_omni/models/higgs_tts/vocoder_scheduler.py b/sglang_omni/models/higgs_tts/vocoder_scheduler.py
+--- a/sglang_omni/models/higgs_tts/vocoder_scheduler.py
++++ b/sglang_omni/models/higgs_tts/vocoder_scheduler.py
+@@ -3,9 +3,12 @@
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import json
++import logging
+ from dataclasses import dataclass, field
+ from typing import Any, Mapping
+ 
+ import torch
+ 
+ from sglang_omni.models.higgs_tts.audio_codec import HiggsAudioCodec
+@@ -22,5 +25,8 @@ from sglang_omni.scheduling.streaming_simple_scheduler import StreamingSimpleSc
+ from sglang_omni.utils.audio_payload import audio_waveform_payload
+ 
+ 
++logger = logging.getLogger(__name__)
++
++
+ @dataclass
+ class _HiggsStreamState:
+@@ -465,10 +471,25 @@ class HiggsStreamingVocoderScheduler(StreamingSimpleScheduler):
+         if delayed_LN.shape[0] < state.num_codebooks:
+             return state, None
+         codes_TN = reverse_delay_pattern(delayed_LN)
+         codec_vocab = int(state.codebook_size) - 2
+-        return state, torch.where(
++        codes_TN = torch.where(
+             codes_TN >= codec_vocab, torch.zeros_like(codes_TN), codes_TN
+         )
++        prefix = codes_TN[:5].tolist()
++        prefix_json = json.dumps(prefix, separators=(",", ":"))
++        full_sha256 = hashlib.sha256(
++            codes_TN.contiguous().numpy().tobytes()
++        ).hexdigest()
++        logger.warning(
++            "HIGGS_SEMANTIC_CODES request_id=%s frames=%d "
++            "prefix_sha256=%s full_sha256=%s prefix=%s",
++            payload.request_id,
++            int(codes_TN.shape[0]),
++            hashlib.sha256(prefix_json.encode("utf-8")).hexdigest(),
++            full_sha256,
++            prefix_json,
++        )
++        return state, codes_TN
+ 
+     def _store_vocoder_result(
+         self,

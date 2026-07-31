@@ -1,0 +1,125 @@
+diff --git a/sglang_omni/models/higgs_tts/model_runner.py b/sglang_omni/models/higgs_tts/model_runner.py
+--- a/sglang_omni/models/higgs_tts/model_runner.py
++++ b/sglang_omni/models/higgs_tts/model_runner.py
+@@ -10,6 +10,7 @@ pool[row_indices]`` gather/scatter under capture (capture-time
+ from __future__ import annotations
+ 
+ import logging
++import os
+ from typing import Any
+ 
+ import torch
+@@ -25,6 +26,18 @@ from sglang_omni.scheduling.messages import OutgoingMessage
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _syncfree_launch_enabled() -> bool:
++    """Parse SGLANG_OMNI_SYNCFREE_LAUNCH (default ON; 0/false/no disable)."""
++    value = os.environ.get("SGLANG_OMNI_SYNCFREE_LAUNCH", "1").lower()
++    if value in ("1", "true", "yes"):
++        return True
++    if value in ("0", "false", "no"):
++        return False
++    raise ValueError(
++        f'"{value}" is not a valid SGLANG_OMNI_SYNCFREE_LAUNCH boolean value'
++    )
++
++
+ class HiggsTTSModelRunner(ModelRunner):
+     """ModelRunner for :class:`HiggsTTSModel`."""
+ 
+@@ -32,6 +45,11 @@ class HiggsTTSModelRunner(ModelRunner):
+         super().__init__(tp_worker, output_processor)
+         self._outbox: Any | None = None
+         self._vocoder_target = "vocoder"
++        # Upstream sglang-omni PR #1124: avoid rebuilding composition-invariant
++        # decode launch buffers while the request batch is unchanged.
++        self._syncfree_launch: bool = _syncfree_launch_enabled()
++        self._cg_launch_key: tuple | None = None
+ 
+     def set_stream_outbox(self, outbox: Any) -> None:
+         self._outbox = outbox
+@@ -125,49 +143,56 @@ class HiggsTTSModelRunner(ModelRunner):
+ 
+         model._sampler_pool.reset_row(model._padding_row)
+ 
++        # A request absent from the row map is a fresh acquisition. Invalidate
++        # before acquire_row so a reused request ID cannot collide with a stale
++        # (request-id, row, graph-batch-size) launch key.
++        if any(req.request_id not in model._rid_to_row for req in requests):
++            self._cg_launch_key = None
+         rows_py: list[int] = [model.acquire_row(req.request_id) for req in requests]
+-        rows_py.extend([model._padding_row] * (bs - n_real))
+-        model._cg_row_indices[:bs] = torch.tensor(
+-            rows_py, dtype=torch.long, device=model._cg_row_indices.device
+-        )
++        launch_key = (tuple(req.request_id for req in requests), tuple(rows_py), bs)
++        if not (self._syncfree_launch and launch_key == self._cg_launch_key):
++            # Publish the key only after every launch buffer rebuild succeeds.
++            self._cg_launch_key = None
++            rows_full = rows_py + [model._padding_row] * (bs - n_real)
++            model._cg_row_indices[:bs] = torch.tensor(
++                rows_full, dtype=torch.long, device=model._cg_row_indices.device
++            )
++
++            temps, top_ps, top_ks = self._extract_decode_sampling_params(
++                forward_batch, n_real
++            )
++            temps.extend([1.0] * (bs - n_real))
++            top_ps.extend([1.0] * (bs - n_real))
++            model._cg_temperature[:bs] = torch.tensor(
++                temps, dtype=torch.float32, device=model._cg_temperature.device
++            )
++            model._cg_top_p[:bs] = torch.tensor(
++                top_ps, dtype=torch.float32, device=model._cg_top_p.device
++            )
++
++            top_k_vals = [
++                (tk if (tk is not None and tk > 0) else K_MAX) for tk in top_ks
++            ]
++            top_k_vals.extend([K_MAX] * (bs - n_real))
++            model._cg_top_k_buf[:bs] = torch.tensor(
++                top_k_vals, dtype=torch.long, device=model._cg_top_k_buf.device
++            )
++            self._cg_launch_key = launch_key
+ 
+         if self._async_enabled and is_lookahead and n_real > 0:
+             # Async-lookahead overrun guard (GPU-side, no host sync): a request
+             # that finished via EOC at the prior step is still in this batch
+             # with pool.generation_done=True. Running the normal decode forward
+             # for such a done row trips a device-side gather assert, so route it
+             # to the reset padding row — its overrun output is discarded by the
+             # collect's finished()/was_done skip anyway. Length-finish rows have
+             # generation_done=False and are untouched.
+-            #
+-            # Only the lookahead launch path can carry such an overrun (the
+-            # 1-wasted-step lag). On a fast-path (sync) decode step finished reqs
+-            # are filtered out before the step, so no generation_done row is ever
+-            # present and this gather+torch.where would be pure wasted GPU work.
+             rows_t_real = model._cg_row_indices[:n_real]
+             done = model._sampler_pool.generation_done[rows_t_real]
+             model._cg_row_indices[:n_real] = torch.where(
+                 done, torch.full_like(rows_t_real, model._padding_row), rows_t_real
+             )
+ 
+-        temps, top_ps, top_ks = self._extract_decode_sampling_params(
+-            forward_batch, n_real
+-        )
+-        temps.extend([1.0] * (bs - n_real))
+-        top_ps.extend([1.0] * (bs - n_real))
+-        model._cg_temperature[:bs] = torch.tensor(
+-            temps, dtype=torch.float32, device=model._cg_temperature.device
+-        )
+-        model._cg_top_p[:bs] = torch.tensor(
+-            top_ps, dtype=torch.float32, device=model._cg_top_p.device
+-        )
+-
+-        top_k_vals = [(tk if (tk is not None and tk > 0) else K_MAX) for tk in top_ks]
+-        top_k_vals.extend([K_MAX] * (bs - n_real))
+-        model._cg_top_k_buf[:bs] = torch.tensor(
+-            top_k_vals, dtype=torch.long, device=model._cg_top_k_buf.device
+-        )
+-
+         rows_t = model._cg_row_indices[:bs]
+         pool = model._sampler_pool
+         model._cg_active_delay_count[:bs] = pool.delay_count[rows_t]

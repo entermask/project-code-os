@@ -1,0 +1,12 @@
+diff --git a/sglang_omni/models/higgs_tts/model.py b/sglang_omni/models/higgs_tts/model.py
+--- a/sglang_omni/models/higgs_tts/model.py
++++ b/sglang_omni/models/higgs_tts/model.py
+@@ -565,6 +565,7 @@ class HiggsTTSModel(nn.Module):
+                 )
+             param.data.copy_(tensor.to(param.dtype))
+             loaded.add(name)
+ 
++        self_weights.clear()
+         self.post_load_weights()
+         return loaded
+ 

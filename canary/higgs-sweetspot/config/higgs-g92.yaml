@@ -1,0 +1,153 @@
+model_path: /root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581
+stages:
+- name: preprocessing
+  factory: sglang_omni.models.higgs_tts.stages.create_preprocessing_executor
+  factory_args:
+    max_concurrency: 96
+  next: audio_encoder
+  terminal: false
+  route_fn: null
+  gpu: null
+  tp_size: 1
+  parallelism:
+    tp: 1
+  process: pipeline
+  runtime:
+    resources:
+      total_gpu_memory_fraction: null
+    max_seq_len: null
+    video_fps: null
+    sglang_server_args:
+      mem_fraction_static: null
+  runtime_arg_map: {}
+  wait_for: null
+  wait_for_fn: null
+  merge_fn: null
+  stream_to: []
+  stream_done_to_fn: null
+  can_accept_stream_before_payload: false
+  project_payload: {}
+  relay: null
+- name: audio_encoder
+  factory: sglang_omni.models.higgs_tts.stages.create_audio_encoder_executor
+  factory_args:
+    device: cuda
+    max_batch_size: 96
+  next: tts_engine
+  terminal: false
+  route_fn: null
+  gpu: 0
+  tp_size: 1
+  parallelism:
+    tp: 1
+  process: pipeline
+  runtime:
+    resources:
+      total_gpu_memory_fraction: null
+    max_seq_len: null
+    video_fps: null
+    sglang_server_args:
+      mem_fraction_static: null
+  runtime_arg_map: {}
+  wait_for: null
+  wait_for_fn: null
+  merge_fn: null
+  stream_to: []
+  stream_done_to_fn: null
+  can_accept_stream_before_payload: false
+  project_payload: {}
+  relay: null
+- name: tts_engine
+  factory: sglang_omni.models.higgs_tts.stages.create_sglang_tts_engine_executor
+  factory_args:
+    device: cuda
+    max_new_tokens: 2048
+    enable_async_decode: true
+    server_args_overrides:
+      max_running_requests: 96
+      cuda_graph_bs:
+      - 1
+      - 2
+      - 4
+      - 8
+      - 12
+      - 16
+      - 24
+      - 32
+      - 40
+      - 48
+      - 56
+      - 64
+      - 72
+      - 80
+      - 88
+      - 92
+      - 96
+  next: vocoder
+  terminal: false
+  route_fn: null
+  gpu: 0
+  tp_size: 1
+  parallelism:
+    tp: 1
+  process: pipeline
+  runtime:
+    resources:
+      total_gpu_memory_fraction: null
+    max_seq_len: null
+    video_fps: null
+    sglang_server_args:
+      mem_fraction_static: null
+  runtime_arg_map: {}
+  wait_for: null
+  wait_for_fn: null
+  merge_fn: null
+  stream_to:
+  - vocoder
+  stream_done_to_fn: null
+  can_accept_stream_before_payload: false
+  project_payload: {}
+  relay: null
+- name: vocoder
+  factory: sglang_omni.models.higgs_tts.stages.create_vocoder_executor
+  factory_args:
+    device: cuda
+    max_batch_size: 96
+  next: null
+  terminal: true
+  route_fn: null
+  gpu: 0
+  tp_size: 1
+  parallelism:
+    tp: 1
+  process: pipeline
+  runtime:
+    resources:
+      total_gpu_memory_fraction: null
+    max_seq_len: null
+    video_fps: null
+    sglang_server_args:
+      mem_fraction_static: null
+  runtime_arg_map: {}
+  wait_for: null
+  wait_for_fn: null
+  merge_fn: null
+  stream_to: []
+  stream_done_to_fn: null
+  can_accept_stream_before_payload: true
+  project_payload: {}
+  relay: null
+name: /root/autodl-tmp/hf-cache/models--bosonai--higgs-audio-v3-tts-4b/snapshots/a7f70853f163c4cccbdd27ce9a80dd97961fc581
+entry_stage: null
+relay_backend: shm
+fused_stages: []
+runtime_overrides: {}
+env_defaults: {}
+placement:
+  max_total_gpu_memory_fraction_per_gpu: 1.0
+  require_memory_fraction_for_colocation: true
+placement_policy: null
+endpoints:
+  base_path: /tmp/sglang_omni
+terminal_stages_fn: null
+config_cls: HiggsTtsPipelineConfig
