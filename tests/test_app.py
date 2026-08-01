@@ -1635,3 +1635,57 @@ def test_trim_lead_silence_bo_qua_dinh_dang_la(api):
         wav.writeframes(b"\x00\x00\x00\x00" * 2400)
     data = stereo.getvalue()
     assert api._trim_lead_silence(data) == data
+
+
+def test_pause_prefix_khong_chen_khi_caller_tu_dat_pause(api, monkeypatch):
+    monkeypatch.setenv("HIGGS_PAUSE_PREFIX", "1")
+    api = importlib.reload(api)
+    ref = api.ReferenceCacheEntry(
+        audio_path=api.Path("/tmp/ref.wav"), transcript="ref", audio_cache_hit=True
+    )
+    req = api.TTSRequest(chunks=["x"], ref_audio_url="http://x/r.wav", ref_text="ref")
+    for text in (
+        "<|prosody:pause|>Xin chào",
+        "  <|prosody:pause|>Xin chào",
+        "<|prosody:long_pause|>Xin chào",
+        '<break time="1s" />Xin chào',
+    ):
+        # KHÔNG được thành pause đôi.
+        assert api._sglang_payload(text, req, ref)["input"] == text
+    # Text thường vẫn được chèn.
+    assert api._sglang_payload("Xin chào", req, ref)["input"] == "<|prosody:pause|>Xin chào"
+
+
+@pytest.mark.asyncio
+async def test_khong_cat_lang_khi_caller_tu_dat_pause(api, monkeypatch):
+    monkeypatch.setenv("HIGGS_PAUSE_PREFIX", "1")
+    api = importlib.reload(api)
+    long_lead = wav_with_lead_silence(800)
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+        content = long_lead
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    async def fake_client():
+        return FakeClient()
+
+    monkeypatch.setattr(api, "_get_sglang_client", fake_client)
+    monkeypatch.setattr(api, "_unwrap_sglang_audio", lambda body: body)
+    ref = api.ReferenceCacheEntry(
+        audio_path=api.Path("/tmp/ref.wav"), transcript="ref", audio_cache_hit=True
+    )
+    req = api.TTSRequest(chunks=["x"], ref_audio_url="http://x/r.wav", ref_text="ref", format="wav")
+
+    kept = await api._call_sglang("<|prosody:pause|>Xin chào", req, ref)
+    assert wav_duration_ms(kept.audio_bytes) == pytest.approx(1100, abs=6)  # 800+300, NGUYÊN
+
+    trimmed = await api._call_sglang("Xin chào", req, ref)
+    assert wav_duration_ms(trimmed.audio_bytes) == pytest.approx(360, abs=6)  # cắt còn 60+300

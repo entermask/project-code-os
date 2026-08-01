@@ -160,6 +160,9 @@ HIGGS_TOP_K = int(os.getenv("HIGGS_TOP_K", "50"))
 # Lặng thừa được cắt lại ở _trim_lead_silence. Mặc định TẮT.
 HIGGS_PAUSE_PREFIX = os.getenv("HIGGS_PAUSE_PREFIX", "0").strip().lower() in ("1", "true", "yes", "on")
 _PAUSE_PREFIX_TOKEN = "<|prosody:pause|>"
+# Caller TỰ đặt pause đầu chunk → KHÔNG chèn thêm và KHÔNG cắt: nếu cắt thì đúng
+# khoảng lặng họ cố ý yêu cầu bị san phẳng về LEAD_SILENCE_KEEP_MS.
+_OWN_LEAD_PAUSE_RE = re.compile(r"^\s*(<\|prosody:(?:long_)?pause\|>|<break\b)", re.IGNORECASE)
 # Giữ lại bấy nhiêu ms im lặng đầu sau khi cắt. 0 = tắt cắt.
 LEAD_SILENCE_KEEP_MS = max(0, int(os.getenv("LEAD_SILENCE_KEEP_MS", "60")))
 LEAD_SILENCE_DBFS = float(os.getenv("LEAD_SILENCE_DBFS", "-45"))
@@ -1392,7 +1395,11 @@ def _sglang_payload(
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "input": (_PAUSE_PREFIX_TOKEN + chunk_text) if HIGGS_PAUSE_PREFIX else chunk_text,
+        "input": (
+            _PAUSE_PREFIX_TOKEN + chunk_text
+            if HIGGS_PAUSE_PREFIX and not _OWN_LEAD_PAUSE_RE.match(chunk_text)
+            else chunk_text
+        ),
         # Multi-turn keeps chunks as WAV internally so the rolling context window
         # can be concatenated/trimmed losslessly; output is re-encoded later.
         "response_format": "wav" if (req.multi_turn or req.af_filter) else req.format,
@@ -1618,7 +1625,12 @@ async def _call_sglang(
     if not audio_bytes:
         raise RuntimeError("SGLang returned empty audio.")
 
-    if HIGGS_PAUSE_PREFIX and LEAD_SILENCE_KEEP_MS and _is_wav(audio_bytes):
+    if (
+        HIGGS_PAUSE_PREFIX
+        and LEAD_SILENCE_KEEP_MS
+        and not _OWN_LEAD_PAUSE_RE.match(chunk_text)
+        and _is_wav(audio_bytes)
+    ):
         audio_bytes = _trim_lead_silence(audio_bytes)
 
     result = ChunkResult(
