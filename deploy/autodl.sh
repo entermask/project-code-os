@@ -1,9 +1,9 @@
 #!/bin/bash
-# Hook khoi dong cua AutoDL/GPUhub: /init/bin/customer.cmd.sh chay file nay moi
-# lan container boot. Logic that de o data disk (/root/autodl-tmp) nen khong mat
-# khi system disk bi dung lai; file nay chi la mot dong moi.
-# Chay nen de khong chan qua trinh boot.
-if [ -x /root/autodl-tmp/bin/higgs-boot.sh ]; then
-    setsid nohup /root/autodl-tmp/bin/higgs-boot.sh >/dev/null 2>&1 &
+# Boot hook cua GPUhub/AutoDL: /init/bin/customer.cmd.sh chay file nay moi lan
+# container khoi dong. Truoc day file KHONG ton tai (log boot ghi "No such file")
+# nen sau moi lan instance restart service nam chet im — box 5 da dinh dung vay.
+# Logic that o data disk vi system disk co the bi dung lai.
+if [ -x /root/autodl-tmp/bin/higgs-up.sh ]; then
+    setsid nohup bash /root/autodl-tmp/bin/higgs-up.sh >/dev/null 2>&1 &
 fi
 exit 0
