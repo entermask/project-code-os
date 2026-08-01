@@ -1689,3 +1689,41 @@ async def test_khong_cat_lang_khi_caller_tu_dat_pause(api, monkeypatch):
 
     trimmed = await api._call_sglang("Xin chào", req, ref)
     assert wav_duration_ms(trimmed.audio_bytes) == pytest.approx(360, abs=6)  # cắt còn 60+300
+
+
+# --- Fair-share quota (JOB_QUOTA_FAIR_SHARE, mặc định off) ---
+
+
+def test_quota_mac_dinh_giu_nguyen_hai_nac_burst(api):
+    assert api.JOB_QUOTA_FAIR_SHARE is False
+    # 1-2 job cùng lane → burst; đông hơn → quota thường. Không đổi hành vi cũ.
+    assert api._job_in_flight_limit(1, 100) == api.MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB
+    assert api._job_in_flight_limit(2, 100) == api.MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB
+    assert api._job_in_flight_limit(3, 100) == api.MAX_IN_FLIGHT_CHUNKS_PER_JOB
+
+
+def test_quota_fair_share_chia_deu_va_kep_trong_min_max(api, monkeypatch):
+    monkeypatch.setenv("JOB_QUOTA_FAIR_SHARE", "1")
+    monkeypatch.setenv("JOB_QUOTA_MIN", "12")
+    monkeypatch.setenv("JOB_QUOTA_MAX", "24")
+    monkeypatch.setenv("MAX_CONCURRENT_CHUNKS", "128")
+    api = importlib.reload(api)
+    assert (api.JOB_QUOTA_MIN, api.JOB_QUOTA_MAX) == (12, 24)
+    # Vắng → chạm trần MAX (không vượt 24 vì worker chỉ gửi tối đa 24 chunk).
+    assert api._job_in_flight_limit(1, 100) == 24
+    assert api._job_in_flight_limit(5, 100) == 24   # 128//5 = 25 → kẹp 24
+    # Đông dần → co lại.
+    assert api._job_in_flight_limit(8, 100) == 16   # 128//8
+    assert api._job_in_flight_limit(10, 100) == 12  # 128//10 = 12
+    # Rất đông → chạm sàn MIN, không tụt về 1.
+    assert api._job_in_flight_limit(64, 100) == 12
+    # Job nhỏ hơn quota thì lấy đúng số chunk nó có.
+    assert api._job_in_flight_limit(1, 3) == 3
+
+
+def test_quota_fair_share_khong_bao_gio_tra_0(api, monkeypatch):
+    monkeypatch.setenv("JOB_QUOTA_FAIR_SHARE", "1")
+    monkeypatch.setenv("JOB_QUOTA_MIN", "1")
+    monkeypatch.setenv("MAX_CONCURRENT_CHUNKS", "2")
+    api = importlib.reload(api)
+    assert api._job_in_flight_limit(9999, 50) >= 1

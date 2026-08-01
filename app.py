@@ -86,6 +86,11 @@ MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB = min(
     ),
 )
 MAX_BURST_ACTIVE_JOBS = max(1, int(os.getenv("MAX_BURST_ACTIVE_JOBS", "2")))
+# Fair-share quota (opt-in, xem _job_in_flight_limit). Mặc định TẮT → giữ nguyên
+# hai nấc burst/thường như cũ.
+JOB_QUOTA_FAIR_SHARE = os.getenv("JOB_QUOTA_FAIR_SHARE", "0").strip().lower() in ("1", "true", "yes", "on")
+JOB_QUOTA_MIN = max(1, int(os.getenv("JOB_QUOTA_MIN", "12")))
+JOB_QUOTA_MAX = max(JOB_QUOTA_MIN, int(os.getenv("JOB_QUOTA_MAX", "24")))
 BUSY_BACKLOG_CHUNKS = max(1, int(os.getenv("BUSY_BACKLOG_CHUNKS", "32")))
 # Per-chunk retry: lỗi tạm từ SGLang (5xx/CUDA/network) hoặc audio rỗng/quá nhỏ
 # sẽ được sinh lại tối đa CHUNK_RETRY_ATTEMPTS lần thay vì giết cả job ngay.
@@ -805,10 +810,23 @@ async def _lane_slot(lane: str):
 
 
 def _job_in_flight_limit(active_same_lane_jobs: int, chunks_total: int) -> int:
-    """Chọn quota tĩnh khi job bắt đầu; không đánh thức hàng nghìn coroutine khi tải cao."""
-    configured_limit = MAX_IN_FLIGHT_CHUNKS_PER_JOB
-    if active_same_lane_jobs <= MAX_BURST_ACTIVE_JOBS:
-        configured_limit = MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB
+    """Chọn quota tĩnh khi job bắt đầu; không đánh thức hàng nghìn coroutine khi tải cao.
+
+    FAIR_SHARE (opt-in): chia đều cap cho số job cùng lane, kẹp trong
+    [JOB_QUOTA_MIN, JOB_QUOTA_MAX]. Cụm đo được p50 chỉ ~9 chunk/box nên quota
+    cố định 10 để GPU rảnh; chia đều cho job ĐANG có mới tận dụng được lúc vắng
+    mà vẫn co lại khi đông. Trần trên = 24 vì worker gửi tối đa 24 chunk/job
+    (OMNIVOICE_TTS_BATCH_SIZE); multi-turn cap 40 nhưng chạy TUẦN TỰ nên quota
+    không áp dụng. Quota vẫn chốt lúc job bắt đầu (dính khi tải đổi đột ngột),
+    chấp nhận được vì job sống ~3s nên quota cũ tự hết hạn nhanh.
+    """
+    if JOB_QUOTA_FAIR_SHARE:
+        share = MAX_CONCURRENT_CHUNKS // max(1, active_same_lane_jobs)
+        configured_limit = max(JOB_QUOTA_MIN, min(JOB_QUOTA_MAX, share))
+    else:
+        configured_limit = MAX_IN_FLIGHT_CHUNKS_PER_JOB
+        if active_same_lane_jobs <= MAX_BURST_ACTIVE_JOBS:
+            configured_limit = MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB
     return max(1, min(configured_limit, chunks_total))
 
 
