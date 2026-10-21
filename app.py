@@ -700,6 +700,46 @@ def _ensure_dirs() -> None:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# /health bị worker poll mỗi ~4 s. Đếm cache (~10^5 file, không bao giờ dọn) bằng glob ĐỒNG BỘ
+# từng chặn event loop 2-4 s mỗi lần → wrapper đứng hình ~11-18% thời gian, đồng loạt cả fleet
+# (RCA 21/10/2026). Đếm trong thread, cache CACHE_COUNT_TTL_SEC; /health chỉ đọc số đã có
+# (-1 = chưa đếm xong lần đầu). Không ai ở worker đọc hai field này.
+CACHE_COUNT_TTL_SEC = max(1.0, float(os.getenv("CACHE_COUNT_TTL_SEC", "60")))
+_cache_counts = {"audio": -1, "transcript": -1}
+_cache_counts_at = float("-inf")
+_cache_counts_task: Optional[asyncio.Task] = None
+
+
+def _count_dir_entries(path: Path, suffix: Optional[str] = None) -> int:
+    # Khớp glob cũ (pathlib "*" có khớp dotfile); transcripts chỉ đếm *.json.
+    try:
+        with os.scandir(path) as entries:
+            return sum(1 for entry in entries if suffix is None or entry.name.endswith(suffix))
+    except FileNotFoundError:
+        return 0
+
+
+async def _refresh_cache_counts() -> None:
+    global _cache_counts_at
+    try:
+        audio = await asyncio.to_thread(_count_dir_entries, REF_AUDIO_DIR)
+        transcript = await asyncio.to_thread(_count_dir_entries, TRANSCRIPT_DIR, ".json")
+        _cache_counts["audio"] = audio
+        _cache_counts["transcript"] = transcript
+    except Exception as exc:  # chỉ là số thống kê: lỗi không được làm hỏng /health
+        logger.warning("cache count refresh failed: %s", exc)
+    finally:
+        _cache_counts_at = time.monotonic()
+
+
+def _cache_counts_snapshot() -> tuple[int, int]:
+    global _cache_counts_task
+    stale = time.monotonic() - _cache_counts_at >= CACHE_COUNT_TTL_SEC
+    if stale and (_cache_counts_task is None or _cache_counts_task.done()):
+        _cache_counts_task = asyncio.create_task(_refresh_cache_counts())
+    return _cache_counts["audio"], _cache_counts["transcript"]
+
+
 def _request_lane(req: TTSRequest) -> str:
     if not SHORT_RESERVED_CHUNKS:
         return "default"
@@ -2254,14 +2294,15 @@ async def health() -> dict[str, Any]:
     )
     async with outstanding_chunks_lock:
         current_outstanding = outstanding_chunks
+    cache_audio_count, cache_transcript_count = _cache_counts_snapshot()
     payload = {
         "status": "ok",
         "tts_backend_name": TTS_BACKEND_NAME,
         "sglang_ready": sglang_ready,
         "sglang_base_url": SGLANG_BASE_URL,
         "sglang_status": sglang_status,
-        "cache_audio_count": len(list(REF_AUDIO_DIR.glob("*"))),
-        "cache_transcript_count": len(list(TRANSCRIPT_DIR.glob("*.json"))),
+        "cache_audio_count": cache_audio_count,
+        "cache_transcript_count": cache_transcript_count,
         "active_tts_jobs": counts["queued"] + counts["running"],
         "tts_jobs": counts,
         "max_concurrent_chunks": MAX_CONCURRENT_CHUNKS,
@@ -2299,6 +2340,8 @@ async def clear_cache(_: None = Depends(_validate_token)) -> dict[str, str]:
         path.mkdir(parents=True, exist_ok=True)
     async with cache_locks_guard:
         cache_locks.clear()
+    global _cache_counts_at
+    _cache_counts_at = float("-inf")  # /health kế tiếp đếm lại thay vì trả số trước khi xoá
     return {
         "status": "ok",
         "message": "All cached reference audios and transcripts cleared successfully.",

@@ -1345,6 +1345,90 @@ async def test_ffmpeg_timing_is_absent_from_health_by_default(api, monkeypatch):
     assert "ffmpeg_timing" not in payload
 
 
+# --- /health không được đếm cache đồng bộ trên event loop (RCA 21/10/2026) ---
+
+
+@pytest.mark.asyncio
+async def test_health_cache_counts_dem_trong_thread_va_cache(api, monkeypatch):
+    monkeypatch.setattr(api, "_sglang_health", _healthy_sglang)
+    api._ensure_dirs()
+    for name in ("a.wav", "b.mp3", ".hidden"):
+        (api.REF_AUDIO_DIR / name).write_bytes(b"x")
+    for name in ("a.json", "b.json", "c.tmp", ".d.json"):
+        (api.TRANSCRIPT_DIR / name).write_bytes(b"{}")
+
+    def no_glob(*_args, **_kwargs):
+        raise AssertionError("/health không được glob đồng bộ")
+
+    monkeypatch.setattr(api.Path, "glob", no_glob)
+    threads = []
+    real_to_thread = api.asyncio.to_thread
+
+    async def spy_to_thread(func, *args):
+        threads.append(func)
+        return await real_to_thread(func, *args)
+
+    monkeypatch.setattr(api.asyncio, "to_thread", spy_to_thread)
+
+    first = await api.health()
+    assert (first["cache_audio_count"], first["cache_transcript_count"]) == (-1, -1)
+    await api._cache_counts_task
+    assert threads == [api._count_dir_entries, api._count_dir_entries]
+
+    second = await api.health()
+    # Khớp glob cũ: pathlib "*" có khớp dotfile; transcripts chỉ đếm *.json.
+    assert (second["cache_audio_count"], second["cache_transcript_count"]) == (3, 3)
+    task = api._cache_counts_task
+    (api.REF_AUDIO_DIR / "c.wav").write_bytes(b"x")
+    third = await api.health()
+    assert api._cache_counts_task is task  # còn trong TTL: không đếm lại
+    assert third["cache_audio_count"] == 3
+
+    api._cache_counts_at -= api.CACHE_COUNT_TTL_SEC  # hết TTL → lần poll sau đếm lại
+    await api.health()
+    assert api._cache_counts_task is not task
+    await api._cache_counts_task
+    fourth = await api.health()
+    assert fourth["cache_audio_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_cache_clear_bat_health_dem_lai(api, monkeypatch):
+    monkeypatch.setattr(api, "_sglang_health", _healthy_sglang)
+    api._ensure_dirs()
+    (api.REF_AUDIO_DIR / "a.wav").write_bytes(b"x")
+    await api.health()
+    await api._cache_counts_task
+    assert (await api.health())["cache_audio_count"] == 1
+    task = api._cache_counts_task
+
+    await api.clear_cache(None)
+    await api.health()
+    assert api._cache_counts_task is not task
+    await api._cache_counts_task
+    assert (await api.health())["cache_audio_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_health_cache_counts_loi_dem_khong_lam_hong_health(api, monkeypatch):
+    monkeypatch.setattr(api, "_sglang_health", _healthy_sglang)
+
+    def broken_count(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(api, "_count_dir_entries", broken_count)
+    first = await api.health()
+    await api._cache_counts_task
+    second = await api.health()
+    assert first["status"] == "ok" and second["status"] == "ok"
+    assert (second["cache_audio_count"], second["cache_transcript_count"]) == (-1, -1)
+    # Lỗi vẫn tính là một lần làm mới: không spawn lại mỗi lần poll.
+    assert api._cache_counts_at > float("-inf")
+    task = api._cache_counts_task
+    await api.health()
+    assert api._cache_counts_task is task
+
+
 @pytest.mark.asyncio
 async def test_ffmpeg_timing_tracks_success_and_exposes_health(api, monkeypatch):
     monkeypatch.setenv("HIGGS_FFMPEG_TIMING", "1")

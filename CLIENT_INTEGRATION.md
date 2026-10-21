@@ -476,6 +476,8 @@ cache_transcript_count
 sglang_ready
 ```
 
+`cache_audio_count` / `cache_transcript_count` are counted off the event loop and cached for `CACHE_COUNT_TTL_SEC` (default 60 s); `-1` means the first count has not finished yet.
+
 Simple rule:
 
 ```text
