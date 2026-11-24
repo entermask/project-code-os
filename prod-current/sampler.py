@@ -77,6 +77,23 @@ RAS_WIN_LEN = int(os.getenv("HIGGS_RAS_WIN_LEN", "7"))
 RAS_WIN_MAX_NUM_REPEAT = int(os.getenv("HIGGS_RAS_WIN_MAX_NUM_REPEAT", "2"))
 _RAS_WIN = max(1, RAS_WIN_LEN)
 
+# HIGGS_SAMPLER_TAIL=1: take the single multinomial draw as argmax(p / Exp(1)),
+# which is what torch.multinomial(p, 1) computes internally (aten Distributions.cpp
+# multinomial_out fast path: exponential_ -> div_out -> argmax_out) minus its input
+# checks (max/min/row-sum reductions + two _assert_async per call). Same RNG draws,
+# same codes. Only difference: a NaN/inf/negative/all-zero row returns some code
+# instead of tripping a device-side assert. Also makes the decode step return a
+# cached zero text-logits view instead of a fresh zeros tensor (model.py).
+_SAMPLER_TAIL = os.getenv("HIGGS_SAMPLER_TAIL", "0") == "1"
+
+
+def _multinomial1(probs: torch.Tensor) -> torch.Tensor:
+    """``probs.multinomial(num_samples=1).squeeze(-1)`` for a 2-D ``probs``."""
+    if not _SAMPLER_TAIL:
+        return probs.multinomial(num_samples=1).squeeze(-1)
+    q = torch.empty_like(probs).exponential_(1.0)
+    return torch.div(probs, q, out=q).argmax(dim=-1)
+
 
 @dataclass
 class HiggsSamplerState:
@@ -142,10 +159,15 @@ class HiggsBatchedSamplerState:
         )
 
     def reset_row(self, row: int) -> None:
-        """Wipe row ``row`` so the next owner can't read stale state."""
-        self.delay_count[row] = 0
-        self.eoc_countdown[row] = -1
-        self.generation_done[row] = False
+        """Wipe row ``row`` so the next owner can't read stale state.
+
+        ``fill_`` instead of ``t[row] = scalar``: on a CUDA tensor the latter is
+        a blocking H2D copy of a CPU scalar (stream sync), and the runner resets
+        the padding row on every decode step.
+        """
+        self.delay_count[row].fill_(0)
+        self.eoc_countdown[row].fill_(-1)
+        self.generation_done[row].fill_(False)
         self.last_codes[row].zero_()
         self.recent_codes[row].fill_(-1)
 
@@ -324,7 +346,7 @@ def _sample_independent_batched(
     if top_p is not None:
         tp = top_p.view(B, 1).expand(B, N).reshape(B * N).to(torch.float32).contiguous()
         probs = _top_p_renorm(probs, tp)
-    codes_flat = probs.multinomial(num_samples=1).squeeze(-1)
+    codes_flat = _multinomial1(probs)
     sampled_BN = codes_flat.view(B, N)
 
     return torch.where(greedy_B1, argmax_BN, sampled_BN).to(torch.long)
@@ -425,7 +447,7 @@ def batched_step_direct(
         rep_BN = (recent_codes == codes_BN.unsqueeze(-1)).sum(dim=-1)
         needs_resample = rep_BN >= RAS_WIN_MAX_NUM_REPEAT
         raw_probs = logits_BNV.float().softmax(dim=-1).reshape(B * N, V)
-        resampled_BN = raw_probs.multinomial(num_samples=1).squeeze(-1).view(B, N)
+        resampled_BN = _multinomial1(raw_probs).view(B, N)
         codes_BN = torch.where(
             needs_resample, resampled_BN.to(codes_BN.dtype), codes_BN
         )

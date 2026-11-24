@@ -77,10 +77,10 @@ logger = logging.getLogger(__name__)
 # Codec runs at 75 Hz; chunked prefill of the multi-codebook prompt is unsafe
 # (sampler state machine has no rollback) so reject inputs past chunked_prefill_size.
 _MAX_REF_AUDIO_SEC = 100
-_REF_CODE_CACHE_MAX_ITEMS = 256
-_REF_CODE_CACHE_MAX_BYTES = 256 * 1024 * 1024
-_REF_WAVEFORM_CACHE_MAX_ITEMS = 256
-_REF_WAVEFORM_CACHE_MAX_BYTES = 512 * 1024 * 1024
+_REF_CODE_CACHE_MAX_ITEMS = 2048
+_REF_CODE_CACHE_MAX_BYTES = 2048 * 1024 * 1024
+_REF_WAVEFORM_CACHE_MAX_ITEMS = 2048
+_REF_WAVEFORM_CACHE_MAX_BYTES = 4096 * 1024 * 1024
 
 # Saturates near c=16 on H100/H200; higher client concurrency only queues.
 DEFAULT_MAX_CONCURRENCY = 96
@@ -409,6 +409,56 @@ def create_audio_encoder_executor(
     )
     speaker_cache = get_speaker_artifact_cache()
 
+    # Opt-in disk tier under the in-memory ref-code cache: entries survive
+    # engine restarts and LRU eviction, so a previously seen reference skips
+    # the codec encode entirely on a fresh process. Keyed by the same
+    # waveform-content key, namespaced by checkpoint snapshot dir so a model
+    # swap can never serve stale codes. Fail-open: any read/validate error
+    # falls through to a fresh encode and overwrites the entry.
+    _disk_dir = os.environ.get(
+        "SGLANG_OMNI_HIGGS_REF_CODE_DISK_CACHE_DIR", ""
+    ).strip()
+    if _disk_dir:
+        _disk_dir = os.path.join(
+            _disk_dir, os.path.basename(os.path.normpath(checkpoint_dir))
+        )
+        os.makedirs(_disk_dir, exist_ok=True)
+
+    def _disk_cache_path(cache_key: str | None) -> str | None:
+        if not _disk_dir or not cache_key:
+            return None
+        return os.path.join(_disk_dir, f"{hash_bytes(cache_key.encode())}.pt")
+
+    def _disk_cache_get(cache_key: str | None) -> torch.Tensor | None:
+        path = _disk_cache_path(cache_key)
+        if path is None or not os.path.exists(path):
+            return None
+        try:
+            codes = torch.load(path, map_location="cpu", weights_only=True)
+        except Exception:
+            logger.warning("unreadable ref-code disk cache entry: %s", path)
+            return None
+        if (
+            not isinstance(codes, torch.Tensor)
+            or codes.ndim != 2
+            or codes.shape[1] != num_codebooks
+            or codes.numel() == 0
+        ):
+            logger.warning("invalid ref-code disk cache entry: %s", path)
+            return None
+        return codes
+
+    def _disk_cache_put(cache_key: str | None, codes: torch.Tensor) -> None:
+        path = _disk_cache_path(cache_key)
+        if path is None:
+            return
+        try:
+            tmp = f"{path}.tmp.{os.getpid()}"
+            torch.save(codes, tmp)
+            os.replace(tmp, path)
+        except Exception:
+            logger.warning("ref-code disk cache write failed: %s", path)
+
     def _encode(payload: StagePayload) -> StagePayload:
         state = HiggsTtsState.from_dict(payload.data)
         waveform = state.reference_waveform
@@ -423,6 +473,12 @@ def create_audio_encoder_executor(
             cached_delayed = speaker_cache.get(speaker_code_cache_key)
         else:
             cached_delayed = reference_code_cache.get(state.reference_code_cache_key)
+            if cached_delayed is None:
+                cached_delayed = _disk_cache_get(state.reference_code_cache_key)
+                if cached_delayed is not None:
+                    reference_code_cache.put(
+                        state.reference_code_cache_key, cached_delayed
+                    )
         if cached_delayed is not None:
             delayed_rows = cached_delayed.tolist()
         else:
@@ -441,6 +497,7 @@ def create_audio_encoder_executor(
                 speaker_cache.put(speaker_code_cache_key, cached_codes)
             else:
                 reference_code_cache.put(state.reference_code_cache_key, cached_codes)
+                _disk_cache_put(state.reference_code_cache_key, cached_codes)
         # Multi-turn: codec-encode each prior chunk's audio and interleave its
         # <|text|> tok <|audio|> [-100]×A block before the current text. Context
         # chunks are unique per request so they bypass the ref-code cache. The
@@ -487,6 +544,8 @@ def create_sglang_tts_engine_executor(
     server_args_overrides: dict[str, Any] | None = None,
     enable_async_decode: bool = False,
     async_decode_min_batch_size: int = 2,
+    prefill_coalesce_requests: int = 0,
+    prefill_coalesce_wait_ms: float = 60.0,
 ):
     """sglang-backed AR engine for Higgs TTS."""
     checkpoint_dir = resolve_checkpoint(model_path)
@@ -552,6 +611,8 @@ def create_sglang_tts_engine_executor(
         abort_callback=model.reset_request,
         enable_async_decode=enable_async_decode,
         async_decode_min_batch_size=async_decode_min_batch_size,
+        prefill_coalesce_requests=prefill_coalesce_requests,
+        prefill_coalesce_wait_ms=prefill_coalesce_wait_ms,
     )
     model_runner.set_stream_outbox(scheduler.outbox)
     return scheduler

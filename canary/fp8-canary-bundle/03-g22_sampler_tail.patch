@@ -1,0 +1,78 @@
+--- a/sglang_omni/models/higgs_tts/sampler.py
++++ b/sglang_omni/models/higgs_tts/sampler.py
+@@ -77,7 +77,24 @@
+ RAS_WIN_MAX_NUM_REPEAT = int(os.getenv("HIGGS_RAS_WIN_MAX_NUM_REPEAT", "2"))
+ _RAS_WIN = max(1, RAS_WIN_LEN)
+ 
++# HIGGS_SAMPLER_TAIL=1: take the single multinomial draw as argmax(p / Exp(1)),
++# which is what torch.multinomial(p, 1) computes internally (aten Distributions.cpp
++# multinomial_out fast path: exponential_ -> div_out -> argmax_out) minus its input
++# checks (max/min/row-sum reductions + two _assert_async per call). Same RNG draws,
++# same codes. Only difference: a NaN/inf/negative/all-zero row returns some code
++# instead of tripping a device-side assert. Also makes the decode step return a
++# cached zero text-logits view instead of a fresh zeros tensor (model.py).
++_SAMPLER_TAIL = os.getenv("HIGGS_SAMPLER_TAIL", "0") == "1"
+ 
++
++def _multinomial1(probs: torch.Tensor) -> torch.Tensor:
++    """``probs.multinomial(num_samples=1).squeeze(-1)`` for a 2-D ``probs``."""
++    if not _SAMPLER_TAIL:
++        return probs.multinomial(num_samples=1).squeeze(-1)
++    q = torch.empty_like(probs).exponential_(1.0)
++    return torch.div(probs, q, out=q).argmax(dim=-1)
++
++
+ @dataclass
+ class HiggsSamplerState:
+     num_codebooks: int
+@@ -324,7 +341,7 @@
+     if top_p is not None:
+         tp = top_p.view(B, 1).expand(B, N).reshape(B * N).to(torch.float32).contiguous()
+         probs = _top_p_renorm(probs, tp)
+-    codes_flat = probs.multinomial(num_samples=1).squeeze(-1)
++    codes_flat = _multinomial1(probs)
+     sampled_BN = codes_flat.view(B, N)
+ 
+     return torch.where(greedy_B1, argmax_BN, sampled_BN).to(torch.long)
+@@ -425,7 +442,7 @@
+         rep_BN = (recent_codes == codes_BN.unsqueeze(-1)).sum(dim=-1)
+         needs_resample = rep_BN >= RAS_WIN_MAX_NUM_REPEAT
+         raw_probs = logits_BNV.float().softmax(dim=-1).reshape(B * N, V)
+-        resampled_BN = raw_probs.multinomial(num_samples=1).squeeze(-1).view(B, N)
++        resampled_BN = _multinomial1(raw_probs).view(B, N)
+         codes_BN = torch.where(
+             needs_resample, resampled_BN.to(codes_BN.dtype), codes_BN
+         )
+--- a/sglang_omni/models/higgs_tts/model.py
++++ b/sglang_omni/models/higgs_tts/model.py
+@@ -19,6 +19,7 @@
+ from sglang_omni.models.higgs_tts.sampler import (
+     K_MAX,
+     _RAS_WIN,
++    _SAMPLER_TAIL,
+     HiggsBatchedSamplerState,
+     batched_step,
+     batched_step_direct,
+@@ -193,6 +194,13 @@
+         # runner each step). Init -1 so an empty window never counts as a repeat.
+         self._cg_active_recent_codes = torch.full(
+             (pool_size, num_codebooks, _RAS_WIN), -1, dtype=torch.long, device=cg_device
++        )
++        # HIGGS_SAMPLER_TAIL: the decode step returns a stride-0 view of this row
++        # instead of a fresh [bs, text_vocab] fp32 zeros. Nothing reads the values
++        # (codes come from the Higgs sampler); the zeros cost a ~78 MB memset per
++        # step at bs 128 and one live tensor per captured CUDA-graph batch size.
++        self._cg_zero_text_logits = torch.zeros(
++            1, text_config.vocab_size, dtype=torch.float32, device=cg_device
+         )
+ 
+     def get_input_embeddings(self) -> nn.Embedding:
+@@ -375,6 +383,8 @@
+         self._cg_active_recent_codes[:batch_size] = new_recent_codes_BNW
+         self._cg_codes_BN[:batch_size] = codes_BN
+ 
++        if _SAMPLER_TAIL:
++            return self._cg_zero_text_logits.expand(batch_size, -1)
+         text_vocab_size = self.backbone.config.vocab_size
+         return torch.zeros(
+             (batch_size, text_vocab_size),

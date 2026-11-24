@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /root/autodl-tmp/Fish-Audio
+
+APP_ROOT=/root/autodl-tmp/Fish-Audio
+cd "$APP_ROOT"
+
 set -a
-. /root/autodl-tmp/Fish-Audio/.env
+. "$APP_ROOT/.env"
 set +a
+
+export APP_MODULE=drain_wrapper:app
 export PYTHONUNBUFFERED=1
-. /root/autodl-tmp/Fish-Audio/.venv/bin/activate
-exec /root/autodl-tmp/Fish-Audio/scripts/run_api.sh
+
+. "$APP_ROOT/.venv/bin/activate"
+exec "$APP_ROOT/scripts/run_api.sh"

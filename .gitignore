@@ -17,6 +17,8 @@ jobs/
 ref-audio/
 transcripts/
 tmp/
+.local-bundles/
+*.so
 *.wav
 *.mp3
 *.m4a

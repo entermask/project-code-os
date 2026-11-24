@@ -10,9 +10,12 @@ import os
 import random
 import re
 import shutil
+import sys
+import threading
 import time
 import uuid
 import wave
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +33,20 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("sglang-tts-api")
+
+
+PCM_STATS_AUDIOOP = os.getenv("HIGGS_PCM_STATS_AUDIOOP", "0").strip().lower()
+if PCM_STATS_AUDIOOP not in ("0", "peak", "all"):
+    raise RuntimeError("HIGGS_PCM_STATS_AUDIOOP must be 0, peak, or all")
+if PCM_STATS_AUDIOOP != "0":
+    try:
+        import audioop as _audioop
+    except ImportError as exc:
+        raise RuntimeError(
+            "HIGGS_PCM_STATS_AUDIOOP requires Python 3.12 audioop or audioop-lts"
+        ) from exc
+else:
+    _audioop = None
 
 
 API_TOKEN = os.getenv("API_TOKEN", "")
@@ -52,10 +69,28 @@ MAX_CONCURRENT_CHUNKS = max(1, int(os.getenv("MAX_CONCURRENT_CHUNKS", "4")))
 SHORT_RESERVED_CHUNKS = max(0, int(os.getenv("SHORT_RESERVED_CHUNKS", "0")))
 if SHORT_RESERVED_CHUNKS >= MAX_CONCURRENT_CHUNKS:
     SHORT_RESERVED_CHUNKS = MAX_CONCURRENT_CHUNKS - 1
+LANE_ADMISSION_MODE = (
+    os.getenv("HIGGS_LANE_ADMISSION_MODE", "dual").strip().lower().replace("-", "_")
+)
+if LANE_ADMISSION_MODE not in {"dual", "soft_reserved"}:
+    raise RuntimeError("HIGGS_LANE_ADMISSION_MODE must be dual or soft_reserved")
 SHORT_REQUEST_MAX_CHARS = max(1, int(os.getenv("SHORT_REQUEST_MAX_CHARS", "1000")))
 SHORT_REQUEST_MAX_CHUNKS = max(1, int(os.getenv("SHORT_REQUEST_MAX_CHUNKS", "4")))
 LONG_CONCURRENT_CHUNKS = MAX_CONCURRENT_CHUNKS - SHORT_RESERVED_CHUNKS
 MAX_IN_FLIGHT_CHUNKS_PER_JOB = max(1, int(os.getenv("MAX_IN_FLIGHT_CHUNKS_PER_JOB", "12")))
+MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB = min(
+    MAX_CONCURRENT_CHUNKS,
+    max(
+        MAX_IN_FLIGHT_CHUNKS_PER_JOB,
+        int(os.getenv("MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB", str(MAX_IN_FLIGHT_CHUNKS_PER_JOB))),
+    ),
+)
+MAX_BURST_ACTIVE_JOBS = max(1, int(os.getenv("MAX_BURST_ACTIVE_JOBS", "2")))
+# Fair-share quota (opt-in, xem _job_in_flight_limit). Mặc định TẮT → giữ nguyên
+# hai nấc burst/thường như cũ.
+JOB_QUOTA_FAIR_SHARE = os.getenv("JOB_QUOTA_FAIR_SHARE", "0").strip().lower() in ("1", "true", "yes", "on")
+JOB_QUOTA_MIN = max(1, int(os.getenv("JOB_QUOTA_MIN", "12")))
+JOB_QUOTA_MAX = max(JOB_QUOTA_MIN, int(os.getenv("JOB_QUOTA_MAX", "24")))
 BUSY_BACKLOG_CHUNKS = max(1, int(os.getenv("BUSY_BACKLOG_CHUNKS", "32")))
 # Per-chunk retry: lỗi tạm từ SGLang (5xx/CUDA/network) hoặc audio rỗng/quá nhỏ
 # sẽ được sinh lại tối đa CHUNK_RETRY_ATTEMPTS lần thay vì giết cả job ngay.
@@ -121,6 +156,21 @@ HIGGS_TEMPERATURE = float(os.getenv("HIGGS_TEMPERATURE", "0.8"))
 _HIGGS_TOP_P_ENV = os.getenv("HIGGS_TOP_P", "").strip()
 HIGGS_TOP_P: Optional[float] = float(_HIGGS_TOP_P_ENV) if _HIGGS_TOP_P_ENV else None
 HIGGS_TOP_K = int(os.getenv("HIGGS_TOP_K", "50"))
+# Phụ âm/âm tiết đầu bị nuốt: model thỉnh thoảng vào thẳng frame 0 (không chừa
+# frame im lặng nào) → âm mở đầu không có chỗ đặt closure, nghe mất chữ ("đáng
+# đời" → "áng đời"). Đo trên prod: 29% chunk_00000 có onset 0ms; theo từng câu tỉ
+# lệ 0-100% (không theo lớp phụ âm — "ông" 80%, "anh" 0%). Prefix token prosody
+# CHÍNH THỨC của v3 (id 151722, có trong tokenizer) ép model sinh lặng thật:
+# gate 100 mẫu qua 6 câu → 0/100 vào frame 0, đổi lại ~12 token (~3.5%) mỗi chunk.
+# Lặng thừa được cắt lại ở _trim_lead_silence. Mặc định TẮT.
+HIGGS_PAUSE_PREFIX = os.getenv("HIGGS_PAUSE_PREFIX", "0").strip().lower() in ("1", "true", "yes", "on")
+_PAUSE_PREFIX_TOKEN = "<|prosody:pause|>"
+# Caller TỰ đặt pause đầu chunk → KHÔNG chèn thêm và KHÔNG cắt: nếu cắt thì đúng
+# khoảng lặng họ cố ý yêu cầu bị san phẳng về LEAD_SILENCE_KEEP_MS.
+_OWN_LEAD_PAUSE_RE = re.compile(r"^\s*(<\|prosody:(?:long_)?pause\|>|<break\b)", re.IGNORECASE)
+# Giữ lại bấy nhiêu ms im lặng đầu sau khi cắt. 0 = tắt cắt.
+LEAD_SILENCE_KEEP_MS = max(0, int(os.getenv("LEAD_SILENCE_KEEP_MS", "60")))
+LEAD_SILENCE_DBFS = float(os.getenv("LEAD_SILENCE_DBFS", "-45"))
 # Natural/multi-turn: ground each chunk on the last N seconds of audio already
 # produced in this job (audio only, NO text — empirically cleaner). The window
 # spans chunk boundaries, so a tiny prior chunk ("OK.") auto-merges with the one
@@ -135,6 +185,7 @@ _RE_ARABIC = re.compile("[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\u
 _RE_THAI = re.compile("[\u0e00-\u0e7f]")
 _RE_DEVANAGARI = re.compile("[\u0900-\u097f]")
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
+FFMPEG_THREADS = max(1, int(os.getenv("FFMPEG_THREADS", "1")))
 # P1 speaker-boost-on-bridge: worker gửi af_filter (chuỗi -af gồm atempo+boost) → áp khi encode
 # WAV→MP3 từng chunk, trả MP3 đã boost (worker chỉ concat-copy). Giới hạn riêng + nice để KHÔNG
 # tranh CPU feed-GPU (container cgroup ~22 core).
@@ -143,6 +194,12 @@ _FFMPEG_POST_NICE = os.getenv("FFMPEG_POST_NICE", "19").strip().lower()
 _FFMPEG_NICE_PREFIX = (
     [] if _FFMPEG_POST_NICE in ("", "0", "off", "false", "no") else ["nice", "-n", _FFMPEG_POST_NICE]
 )
+# Test/canary-only observability for locating FFmpeg queue/process bottlenecks.
+# Default OFF: when disabled, /health keeps its existing schema and counters do no clock/lock work.
+FFMPEG_TIMING_ENABLED = os.getenv("HIGGS_FFMPEG_TIMING", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+_FFMPEG_TIMING_KINDS = ("measure", "encode", "peak_fallback")
 # loudnorm (trong af) là chuẩn-hoá ĐỘNG, cần đủ độ dài để đo ổn định; trên audio NGẮN (<~3s) nó
 # under-measure → boost yếu/lệch. Chunk ngắn (vd segment SRT, câu cuối) bị nhất. Fix: CHỈ với chunk
 # ngắn, pad silence cho loudnorm đủ buffer (LUFS gating bỏ qua silence → vẫn đo đúng speech) rồi atrim
@@ -158,6 +215,117 @@ LOUDNORM_SHARED = os.getenv("LOUDNORM_SHARED", "on").strip().lower() not in ("of
 LN_ANCHOR_WAIT_SEC = float(os.getenv("LN_ANCHOR_WAIT_SEC", "120"))
 _ATEMPO_RE = re.compile(r"atempo=([0-9.]+)")
 _LOUDNORM_RE = re.compile(r"loudnorm=[^,]*")
+
+
+@dataclass
+class _FFmpegTimingCounters:
+    calls: int = 0
+    failures: int = 0
+    queue_wait_s_total: float = 0.0
+    queue_wait_s_max: float = 0.0
+    service_s_total: float = 0.0
+    service_s_max: float = 0.0
+    in_flight: int = 0
+    max_in_flight: int = 0
+
+
+@dataclass
+class _FFmpegTimingToken:
+    kind: str
+    queued_at: float
+    has_queue: bool
+    started_at: Optional[float] = None
+    failed: bool = False
+
+
+_ffmpeg_timing_lock = threading.Lock()
+_ffmpeg_timing_counters = {
+    kind: _FFmpegTimingCounters() for kind in _FFMPEG_TIMING_KINDS
+}
+
+
+def _ffmpeg_timing_begin(kind: str, has_queue: bool) -> Optional[_FFmpegTimingToken]:
+    if not FFMPEG_TIMING_ENABLED:
+        return None
+    token = _FFmpegTimingToken(kind=kind, queued_at=time.perf_counter(), has_queue=has_queue)
+    with _ffmpeg_timing_lock:
+        _ffmpeg_timing_counters[kind].calls += 1
+    return token
+
+
+def _ffmpeg_timing_start(token: Optional[_FFmpegTimingToken]) -> None:
+    if token is None:
+        return
+    now = time.perf_counter()
+    token.started_at = now
+    queue_wait = max(0.0, now - token.queued_at) if token.has_queue else 0.0
+    with _ffmpeg_timing_lock:
+        counters = _ffmpeg_timing_counters[token.kind]
+        counters.queue_wait_s_total += queue_wait
+        counters.queue_wait_s_max = max(counters.queue_wait_s_max, queue_wait)
+        counters.in_flight += 1
+        counters.max_in_flight = max(counters.max_in_flight, counters.in_flight)
+
+
+def _ffmpeg_timing_finish(token: Optional[_FFmpegTimingToken]) -> None:
+    if token is None:
+        return
+    now = time.perf_counter()
+    with _ffmpeg_timing_lock:
+        counters = _ffmpeg_timing_counters[token.kind]
+        if token.started_at is None:
+            # Cancellation/error while waiting for a bounded FFmpeg slot.
+            queue_wait = max(0.0, now - token.queued_at) if token.has_queue else 0.0
+            counters.queue_wait_s_total += queue_wait
+            counters.queue_wait_s_max = max(counters.queue_wait_s_max, queue_wait)
+        else:
+            service = max(0.0, now - token.started_at)
+            counters.service_s_total += service
+            counters.service_s_max = max(counters.service_s_max, service)
+            counters.in_flight = max(0, counters.in_flight - 1)
+        if token.failed:
+            counters.failures += 1
+
+
+@asynccontextmanager
+async def _timed_ffmpeg_operation(
+    kind: str,
+    semaphore: Optional[asyncio.Semaphore] = None,
+):
+    """Observe an existing FFmpeg operation without changing its scheduling semantics."""
+    token = _ffmpeg_timing_begin(kind, has_queue=semaphore is not None)
+    acquired = False
+    try:
+        if semaphore is not None:
+            await semaphore.acquire()
+            acquired = True
+        _ffmpeg_timing_start(token)
+        yield token
+    except BaseException:
+        if token is not None:
+            token.failed = True
+        raise
+    finally:
+        if acquired and semaphore is not None:
+            semaphore.release()
+        _ffmpeg_timing_finish(token)
+
+
+def _ffmpeg_timing_snapshot() -> dict[str, dict[str, Any]]:
+    with _ffmpeg_timing_lock:
+        return {
+            kind: {
+                "calls": counters.calls,
+                "failures": counters.failures,
+                "queue_wait_s_total": round(counters.queue_wait_s_total, 6),
+                "queue_wait_s_max": round(counters.queue_wait_s_max, 6),
+                "service_s_total": round(counters.service_s_total, 6),
+                "service_s_max": round(counters.service_s_max, 6),
+                "in_flight": counters.in_flight,
+                "max_in_flight": counters.max_in_flight,
+            }
+            for kind, counters in _ffmpeg_timing_counters.items()
+        }
 
 
 def _atempo_product(af: str) -> float:
@@ -265,15 +433,165 @@ OPTIONAL_SGLANG_FIELDS = (
 )
 
 
+@dataclass
+class _LaneAdmissionWaiter:
+    lane: str
+    sequence: int
+    future: asyncio.Future
+    granted: bool = False
+
+
+class SoftReservedLaneAdmission:
+    """Unified, work-conserving capacity with a soft short-lane reservation.
+
+    Long work may consume every slot while no short work is waiting. Once short
+    work waits, released slots restore at least ``short_reserve`` concurrent
+    short permits before admission resumes global FIFO order. There is no
+    physical short pool, so every released slot can wake an eligible waiter.
+    """
+
+    def __init__(self, capacity: int, short_reserve: int):
+        if capacity < 1:
+            raise ValueError("capacity must be >= 1")
+        if short_reserve < 0 or short_reserve > capacity:
+            raise ValueError("short_reserve must be between 0 and capacity")
+        self.capacity = capacity
+        self.short_reserve = short_reserve
+        self._lock = asyncio.Lock()
+        self._sequence = 0
+        self._short_waiters: deque[_LaneAdmissionWaiter] = deque()
+        self._regular_waiters: deque[_LaneAdmissionWaiter] = deque()
+        self._inflight_total = 0
+        self._inflight_by_lane: dict[str, int] = {
+            "short": 0,
+            "long": 0,
+            "default": 0,
+        }
+        self._waiting_by_lane: dict[str, int] = {
+            "short": 0,
+            "long": 0,
+            "default": 0,
+        }
+
+    def _queue_for_lane(self, lane: str) -> deque[_LaneAdmissionWaiter]:
+        return self._short_waiters if lane == "short" else self._regular_waiters
+
+    def _next_waiter_locked(self) -> Optional[_LaneAdmissionWaiter]:
+        short = self._short_waiters[0] if self._short_waiters else None
+        regular = self._regular_waiters[0] if self._regular_waiters else None
+        if short is None:
+            return regular
+        if regular is None:
+            return short
+        if self._inflight_by_lane.get("short", 0) < self.short_reserve:
+            return short
+        return short if short.sequence < regular.sequence else regular
+
+    def _dispatch_locked(self) -> None:
+        while self._inflight_total < self.capacity:
+            waiter = self._next_waiter_locked()
+            if waiter is None:
+                return
+            queue = self._queue_for_lane(waiter.lane)
+            popped = queue.popleft()
+            if popped is not waiter:
+                raise RuntimeError("lane admission queue order corrupted")
+            self._waiting_by_lane[waiter.lane] = max(
+                0, self._waiting_by_lane.get(waiter.lane, 0) - 1
+            )
+            self._inflight_total += 1
+            self._inflight_by_lane[waiter.lane] = (
+                self._inflight_by_lane.get(waiter.lane, 0) + 1
+            )
+            waiter.granted = True
+            waiter.future.set_result(None)
+
+    async def _cancel_waiter(self, waiter: _LaneAdmissionWaiter) -> None:
+        async with self._lock:
+            if waiter.granted:
+                self._inflight_total -= 1
+                self._inflight_by_lane[waiter.lane] -= 1
+                waiter.granted = False
+            else:
+                queue = self._queue_for_lane(waiter.lane)
+                try:
+                    queue.remove(waiter)
+                except ValueError:
+                    pass
+                else:
+                    self._waiting_by_lane[waiter.lane] = max(
+                        0, self._waiting_by_lane.get(waiter.lane, 0) - 1
+                    )
+            self._dispatch_locked()
+
+    async def acquire(self, lane: str) -> str:
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        async with self._lock:
+            self._sequence += 1
+            waiter = _LaneAdmissionWaiter(
+                lane=lane,
+                sequence=self._sequence,
+                future=future,
+            )
+            self._queue_for_lane(lane).append(waiter)
+            self._waiting_by_lane[lane] = self._waiting_by_lane.get(lane, 0) + 1
+            self._dispatch_locked()
+        try:
+            await asyncio.shield(future)
+        except BaseException:
+            await asyncio.shield(self._cancel_waiter(waiter))
+            raise
+        return "unified"
+
+    async def release(self, lane: str) -> None:
+        async with self._lock:
+            if (
+                self._inflight_total < 1
+                or self._inflight_by_lane.get(lane, 0) < 1
+            ):
+                raise RuntimeError(f"lane admission release without permit: {lane}")
+            self._inflight_total -= 1
+            self._inflight_by_lane[lane] -= 1
+            self._dispatch_locked()
+
+    async def snapshot(self) -> dict[str, Any]:
+        async with self._lock:
+            return {
+                "capacity": self.capacity,
+                "short_reserve": self.short_reserve,
+                "inflight_total": self._inflight_total,
+                "inflight_by_lane": dict(self._inflight_by_lane),
+                "waiting_by_lane": dict(self._waiting_by_lane),
+            }
+
+
+@dataclass(frozen=True)
+class LaneAdmissionPermit:
+    pool: str
+    semaphore: Optional[asyncio.Semaphore] = None
+
+
 app = FastAPI(title="SGLang TTS API", version="0.2.0")
 
 chunk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHUNKS)
 short_chunk_semaphore = asyncio.Semaphore(SHORT_RESERVED_CHUNKS) if SHORT_RESERVED_CHUNKS else None
 long_chunk_semaphore = asyncio.Semaphore(LONG_CONCURRENT_CHUNKS)
+soft_reserved_lane_admission = SoftReservedLaneAdmission(
+    MAX_CONCURRENT_CHUNKS, SHORT_RESERVED_CHUNKS
+)
 # Gauge quan sát lane (expose qua /health): bao nhiêu chunk đang GIỮ slot / đang CHỜ slot mỗi lane.
 # RCA 2026-07-10: /health cũ mù lane (outstanding gộp) → không thấy lane short nghẹt dù cụm "rảnh".
 lane_inflight: dict[str, int] = {"short": 0, "long": 0, "default": 0}
 lane_waiting: dict[str, int] = {"short": 0, "long": 0, "default": 0}
+# Physical admission pool thực tế. Trong dual mode, short mượn long sẽ tăng
+# ``dual_long``; trong soft_reserved, mọi permit nằm trong một pool unified.
+lane_admission_inflight: dict[str, int] = {
+    "dual_default": 0,
+    "dual_short_reserved": 0,
+    "dual_long": 0,
+    "unified": 0,
+}
 # Bound riêng cho ffmpeg post-proc (boost-on-bridge) → KHÔNG tranh hết core với generation feed-GPU.
 ffmpeg_post_semaphore = asyncio.Semaphore(FFMPEG_POST_CONCURRENCY)
 cache_locks: dict[str, asyncio.Lock] = {}
@@ -283,6 +601,8 @@ jobs_lock = asyncio.Lock()
 outstanding_chunks = 0
 outstanding_chunks_lock = asyncio.Lock()
 cleanup_task: Optional[asyncio.Task] = None
+sglang_http_client: Optional[httpx.AsyncClient] = None
+sglang_http_client_lock = asyncio.Lock()
 
 
 class TTSRequest(BaseModel):
@@ -350,6 +670,7 @@ class TTSJob:
     chunks_degraded: int = 0
     input_chars: int = 0
     lane: str = "default"
+    in_flight_limit: Optional[int] = None
     detail: Optional[str] = None
     chunk_paths: Optional[list[Path]] = None
     chunk_media_type: Optional[str] = None
@@ -379,6 +700,46 @@ def _ensure_dirs() -> None:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# /health bị worker poll mỗi ~4 s. Đếm cache (~10^5 file, không bao giờ dọn) bằng glob ĐỒNG BỘ
+# từng chặn event loop 2-4 s mỗi lần → wrapper đứng hình ~11-18% thời gian, đồng loạt cả fleet
+# (RCA 21/10/2026). Đếm trong thread, cache CACHE_COUNT_TTL_SEC; /health chỉ đọc số đã có
+# (-1 = chưa đếm xong lần đầu). Không ai ở worker đọc hai field này.
+CACHE_COUNT_TTL_SEC = max(1.0, float(os.getenv("CACHE_COUNT_TTL_SEC", "60")))
+_cache_counts = {"audio": -1, "transcript": -1}
+_cache_counts_at = float("-inf")
+_cache_counts_task: Optional[asyncio.Task] = None
+
+
+def _count_dir_entries(path: Path, suffix: Optional[str] = None) -> int:
+    # Khớp glob cũ (pathlib "*" có khớp dotfile); transcripts chỉ đếm *.json.
+    try:
+        with os.scandir(path) as entries:
+            return sum(1 for entry in entries if suffix is None or entry.name.endswith(suffix))
+    except FileNotFoundError:
+        return 0
+
+
+async def _refresh_cache_counts() -> None:
+    global _cache_counts_at
+    try:
+        audio = await asyncio.to_thread(_count_dir_entries, REF_AUDIO_DIR)
+        transcript = await asyncio.to_thread(_count_dir_entries, TRANSCRIPT_DIR, ".json")
+        _cache_counts["audio"] = audio
+        _cache_counts["transcript"] = transcript
+    except Exception as exc:  # chỉ là số thống kê: lỗi không được làm hỏng /health
+        logger.warning("cache count refresh failed: %s", exc)
+    finally:
+        _cache_counts_at = time.monotonic()
+
+
+def _cache_counts_snapshot() -> tuple[int, int]:
+    global _cache_counts_task
+    stale = time.monotonic() - _cache_counts_at >= CACHE_COUNT_TTL_SEC
+    if stale and (_cache_counts_task is None or _cache_counts_task.done()):
+        _cache_counts_task = asyncio.create_task(_refresh_cache_counts())
+    return _cache_counts["audio"], _cache_counts["transcript"]
+
+
 def _request_lane(req: TTSRequest) -> str:
     if not SHORT_RESERVED_CHUNKS:
         return "default"
@@ -396,29 +757,71 @@ def _lane_semaphore(lane: str) -> asyncio.Semaphore:
     return chunk_semaphore
 
 
-async def _acquire_lane_slot(lane: str) -> asyncio.Semaphore:
-    """Acquire 1 lane slot, trả về semaphore ĐÃ acquire (caller phải release đúng cái đó).
+async def _acquire_lane_slot(lane: str) -> LaneAdmissionPermit:
+    """Acquire one lane slot and return its physical admission permit.
 
-    Lane "short" được ƯU TIÊN SHORT_RESERVED_CHUNKS slot dành riêng nhưng KHÔNG bị nhốt ở đó:
+    Default ``dual`` mode preserves the existing two-semaphore behavior exactly:
+    lane "short" được ƯU TIÊN SHORT_RESERVED_CHUNKS slot dành riêng nhưng KHÔNG bị nhốt ở đó:
     hết slot riêng mà pool long còn rảnh thì MƯỢN slot long (RCA 2026-07-10: hard-partition
     4 slot làm job short chờ >120s trong khi 92 slot long rảnh → worker watchdog tưởng bridge
     treo, failover xoay vòng cả cụm). Chiều ngược lại giữ nguyên: long KHÔNG mượn slot short
     (đó mới là ý nghĩa "reserved" — chống long-stampede đè latency short).
     Check `locked()` rồi acquire ngay là an toàn trong asyncio single-thread: giữa check và
     fast-path decrement của acquire() không có await point nên không ai chen được.
+
+    Opt-in ``soft_reserved`` mode uses one work-conserving capacity controller.
     """
+    if LANE_ADMISSION_MODE == "soft_reserved":
+        pool = await soft_reserved_lane_admission.acquire(lane)
+        return LaneAdmissionPermit(pool=pool)
     if lane == "short" and short_chunk_semaphore is not None:
         if not short_chunk_semaphore.locked():
             await short_chunk_semaphore.acquire()
-            return short_chunk_semaphore
+            return LaneAdmissionPermit(
+                pool="dual_short_reserved",
+                semaphore=short_chunk_semaphore,
+            )
         if not long_chunk_semaphore.locked():
             await long_chunk_semaphore.acquire()
-            return long_chunk_semaphore
+            return LaneAdmissionPermit(
+                pool="dual_long",
+                semaphore=long_chunk_semaphore,
+            )
         await short_chunk_semaphore.acquire()
-        return short_chunk_semaphore
+        return LaneAdmissionPermit(
+            pool="dual_short_reserved",
+            semaphore=short_chunk_semaphore,
+        )
     sem = _lane_semaphore(lane)
     await sem.acquire()
-    return sem
+    pool = (
+        "dual_long"
+        if sem is long_chunk_semaphore and SHORT_RESERVED_CHUNKS
+        else "dual_default"
+    )
+    return LaneAdmissionPermit(pool=pool, semaphore=sem)
+
+
+async def _release_soft_reserved_lane_slot(lane: str) -> None:
+    """Return a unified permit even if its holder is cancelled during cleanup.
+
+    Unlike ``Semaphore.release()``, the controller release awaits its internal
+    lock. Run it in a shielded task so cancellation is delayed, not swallowed,
+    until the permit has definitely been returned.
+    """
+    release_task = asyncio.create_task(soft_reserved_lane_admission.release(lane))
+    pending_cancel: Optional[asyncio.CancelledError] = None
+    while not release_task.done():
+        try:
+            await asyncio.shield(release_task)
+        except asyncio.CancelledError as exc:
+            if release_task.cancelled():
+                raise
+            if pending_cancel is None:
+                pending_cancel = exc
+    release_task.result()
+    if pending_cancel is not None:
+        raise pending_cancel
 
 
 @asynccontextmanager
@@ -426,15 +829,54 @@ async def _lane_slot(lane: str):
     """Context manager giữ 1 lane slot + cập nhật gauge lane_waiting/lane_inflight cho /health."""
     lane_waiting[lane] = lane_waiting.get(lane, 0) + 1
     try:
-        sem = await _acquire_lane_slot(lane)
+        permit = await _acquire_lane_slot(lane)
     finally:
         lane_waiting[lane] = max(0, lane_waiting.get(lane, 0) - 1)
     lane_inflight[lane] = lane_inflight.get(lane, 0) + 1
+    lane_admission_inflight[permit.pool] = (
+        lane_admission_inflight.get(permit.pool, 0) + 1
+    )
     try:
         yield
     finally:
         lane_inflight[lane] = max(0, lane_inflight.get(lane, 0) - 1)
-        sem.release()
+        lane_admission_inflight[permit.pool] = max(
+            0, lane_admission_inflight.get(permit.pool, 0) - 1
+        )
+        if permit.semaphore is not None:
+            permit.semaphore.release()
+        else:
+            await _release_soft_reserved_lane_slot(lane)
+
+
+def _job_in_flight_limit(active_same_lane_jobs: int, chunks_total: int) -> int:
+    """Chọn quota tĩnh khi job bắt đầu; không đánh thức hàng nghìn coroutine khi tải cao.
+
+    FAIR_SHARE (opt-in): chia đều cap cho số job cùng lane, kẹp trong
+    [JOB_QUOTA_MIN, JOB_QUOTA_MAX]. Cụm đo được p50 chỉ ~9 chunk/box nên quota
+    cố định 10 để GPU rảnh; chia đều cho job ĐANG có mới tận dụng được lúc vắng
+    mà vẫn co lại khi đông. Trần trên = 24 vì worker gửi tối đa 24 chunk/job
+    (OMNIVOICE_TTS_BATCH_SIZE); multi-turn cap 40 nhưng chạy TUẦN TỰ nên quota
+    không áp dụng. Quota vẫn chốt lúc job bắt đầu (dính khi tải đổi đột ngột),
+    chấp nhận được vì job sống ~3s nên quota cũ tự hết hạn nhanh.
+    """
+    if JOB_QUOTA_FAIR_SHARE:
+        share = MAX_CONCURRENT_CHUNKS // max(1, active_same_lane_jobs)
+        configured_limit = max(JOB_QUOTA_MIN, min(JOB_QUOTA_MAX, share))
+    else:
+        configured_limit = MAX_IN_FLIGHT_CHUNKS_PER_JOB
+        if active_same_lane_jobs <= MAX_BURST_ACTIVE_JOBS:
+            configured_limit = MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB
+    return max(1, min(configured_limit, chunks_total))
+
+
+def _active_same_lane_job_count(lane: str) -> int:
+    """Đếm job có nhu cầu cùng lane; caller production phải đang giữ jobs_lock."""
+    return sum(
+        1
+        for candidate in jobs.values()
+        if candidate.lane == lane and candidate.status in {"queued", "running"}
+    )
 
 
 async def _mark_job_started(request_id: str) -> None:
@@ -724,14 +1166,19 @@ def _wav_rms_dbfs(wav_bytes: bytes) -> Optional[float]:
             if r.getsampwidth() != 2:
                 return None
             frames = r.readframes(r.getnframes())
-        samples = array.array("h")
-        samples.frombytes(frames[: len(frames) - (len(frames) % 2)])
-        if not samples:
+        frames = frames[: len(frames) - (len(frames) % 2)]
+        if not frames:
             return None
-        acc = 0
-        for s in samples:
-            acc += s * s
-        rms = math.sqrt(acc / len(samples))
+        if PCM_STATS_AUDIOOP == "all":
+            assert _audioop is not None
+            rms = float(_audioop.rms(frames, 2))
+        else:
+            samples = array.array("h")
+            samples.frombytes(frames)
+            acc = 0
+            for s in samples:
+                acc += s * s
+            rms = math.sqrt(acc / len(samples))
         if rms <= 0:
             return None
         return 20.0 * math.log10(rms / 32768.0)
@@ -772,10 +1219,11 @@ async def _measure_loudnorm(af: str, wav_bytes: bytes) -> Optional[dict]:
         atempo = _atempo_product(af)
         if 0 < d / atempo < SHORT_LOUDNORM_SEC:
             measure_af = f"apad=whole_dur={SHORT_LOUDNORM_SEC * atempo:.3f},{measure_af}"
-    await ffmpeg_post_semaphore.acquire()
-    try:
+    async with _timed_ffmpeg_operation("measure", ffmpeg_post_semaphore) as timing:
         args = _FFMPEG_NICE_PREFIX + [
-            FFMPEG_BIN, "-hide_banner", "-nostats", "-f", "wav", "-i", "pipe:0",
+            FFMPEG_BIN, "-hide_banner", "-nostats",
+            "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
+            "-f", "wav", "-i", "pipe:0",
             "-af", measure_af, "-f", "null", "-",
         ]
         process = await asyncio.create_subprocess_exec(
@@ -785,8 +1233,8 @@ async def _measure_loudnorm(af: str, wav_bytes: bytes) -> Optional[dict]:
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await process.communicate(wav_bytes)
-    finally:
-        ffmpeg_post_semaphore.release()
+        if timing is not None and process.returncode != 0:
+            timing.failed = True
     if process.returncode != 0:
         return None
     text = stderr.decode("utf-8", "replace")
@@ -878,27 +1326,35 @@ async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None, af_final: bool
 
     # Path KHÔNG boost: giữ nguyên perf (không nice/semaphore, không re-filter).
     if not af:
-        process = await asyncio.create_subprocess_exec(
-            FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0", "-f", "mp3", "pipe:1",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate(wav_bytes)
+        async with _timed_ffmpeg_operation("encode") as timing:
+            process = await asyncio.create_subprocess_exec(
+                FFMPEG_BIN, "-hide_banner", "-loglevel", "error",
+                "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
+                "-f", "wav", "-i", "pipe:0", "-threads", str(FFMPEG_THREADS),
+                "-f", "mp3", "pipe:1",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate(wav_bytes)
+            if timing is not None and process.returncode != 0:
+                timing.failed = True
         if process.returncode != 0:
             raise RuntimeError(f"ffmpeg failed to convert WAV to MP3: {stderr.decode('utf-8', 'replace')}")
         return stdout
 
     # Boost-path: nice + semaphore bao CẢ measure + encode (giữ concurrency bounded ~FFMPEG_POST_CONCURRENCY).
-    await ffmpeg_post_semaphore.acquire()
-    try:
+    async with _timed_ffmpeg_operation("encode", ffmpeg_post_semaphore) as timing:
         # af_final: chain ĐÃ khoá gain tĩnh shared (linear=true) → dùng verbatim, KHÔNG pad-cut
         # (linear không cần buffer đo). Ngược lại: pad-cut short-clip như bản d9cabb7a.
         eff_af = af if af_final else _short_loudnorm_padcut(af, wav_bytes)
         # Boost-on-bridge: ÉP codec KHỚP worker FINAL_MP3 (libmp3lame 128k 44.1k stereo) → worker concat-copy.
         args = _FFMPEG_NICE_PREFIX + [
-            FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+            FFMPEG_BIN, "-hide_banner", "-loglevel", "error",
+            "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
+            "-f", "wav", "-i", "pipe:0",
             "-af", eff_af, "-c:a", "libmp3lame", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-threads", str(FFMPEG_THREADS),
             "-f", "mp3", "pipe:1",
         ]
         process = await asyncio.create_subprocess_exec(
@@ -908,8 +1364,8 @@ async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None, af_final: bool
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate(wav_bytes)
-    finally:
-        ffmpeg_post_semaphore.release()
+        if timing is not None and process.returncode != 0:
+            timing.failed = True
     if process.returncode != 0:
         raise RuntimeError(f"ffmpeg failed to convert WAV to MP3: {stderr.decode('utf-8', 'replace')}")
     return stdout
@@ -997,7 +1453,11 @@ def _sglang_payload(
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "input": chunk_text,
+        "input": (
+            _PAUSE_PREFIX_TOKEN + chunk_text
+            if HIGGS_PAUSE_PREFIX and not _OWN_LEAD_PAUSE_RE.match(chunk_text)
+            else chunk_text
+        ),
         # Multi-turn keeps chunks as WAV internally so the rolling context window
         # can be concatenated/trimmed losslessly; output is re-encoded later.
         "response_format": "wav" if (req.multi_turn or req.af_filter) else req.format,
@@ -1062,19 +1522,132 @@ def _header_float(headers: httpx.Headers, key: str) -> float:
         return 0.0
 
 
-async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
-    """max_volume (dBFS) của audio qua ffmpeg volumedetect. None nếu không phân tích được."""
-    if not audio_bytes or not shutil.which(FFMPEG_BIN):
+async def _get_sglang_client() -> httpx.AsyncClient:
+    """Một connection pool dùng chung cho traffic nội bộ tới SGLang."""
+    global sglang_http_client
+    if sglang_http_client is not None and not sglang_http_client.is_closed:
+        return sglang_http_client
+    async with sglang_http_client_lock:
+        if sglang_http_client is None or sglang_http_client.is_closed:
+            pool_size = MAX_CONCURRENT_CHUNKS + 4  # chừa headroom cho health/retry khi generation đầy lane
+            sglang_http_client = httpx.AsyncClient(
+                timeout=REQUEST_TIMEOUT,
+                limits=httpx.Limits(
+                    max_connections=pool_size,
+                    max_keepalive_connections=pool_size,
+                    keepalive_expiry=30.0,
+                ),
+            )
+    return sglang_http_client
+
+
+def _wav_peak_dbfs(audio_bytes: bytes) -> Optional[float]:
+    """Peak dBFS của PCM16 WAV SGLang; None để caller fallback FFmpeg."""
+    if not _is_wav(audio_bytes):
         return None
     try:
-        proc = await asyncio.create_subprocess_exec(
-            FFMPEG_BIN, "-hide_banner", "-nostats",
-            "-i", "pipe:0", "-af", "volumedetect", "-f", "null", "-",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate(audio_bytes)
+        with wave.open(io.BytesIO(audio_bytes), "rb") as reader:
+            if reader.getcomptype() != "NONE":
+                return None
+            if reader.getsampwidth() != 2:
+                return None
+            frames = reader.readframes(reader.getnframes())
+    except (EOFError, OSError, wave.Error):
+        return None
+
+    if not frames:
+        return None
+
+    frames = frames[:len(frames) - len(frames) % 2]
+    if not frames:
+        return None
+    if PCM_STATS_AUDIOOP in ("peak", "all"):
+        assert _audioop is not None
+        peak = _audioop.max(frames, 2)
+    else:
+        samples = array.array("h")
+        samples.frombytes(frames)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if not samples:
+            return None
+        peak = max(max(samples), -min(samples))
+
+    if peak <= 0:
+        return float("-inf")
+    return 20.0 * math.log10(peak / 32768.0)
+
+
+def _trim_lead_silence(wav_bytes: bytes) -> bytes:
+    """Cắt bớt im lặng đầu do HIGGS_PAUSE_PREFIX sinh ra, GIỮ LEAD_SILENCE_KEEP_MS.
+
+    An toàn tuyệt đối theo thiết kế: chỉ cắt tối đa (onset − keep), nên không bao
+    giờ chạm vào speech; onset < keep (kể cả 0) → trả nguyên bản. Quét bằng cửa sổ
+    5ms, mono s16 (định dạng SGLang trả về); format khác → no-op.
+    """
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as reader:
+            if reader.getnchannels() != 1 or reader.getsampwidth() != 2:
+                return wav_bytes
+            sample_rate = reader.getframerate()
+            frames = reader.readframes(reader.getnframes())
+    except (EOFError, OSError, wave.Error):
+        return wav_bytes
+
+    window = max(2, int(sample_rate * 0.005) * 2)
+    threshold = 32768.0 * (10.0 ** (LEAD_SILENCE_DBFS / 20.0))
+    onset_bytes = None
+    for offset in range(0, len(frames) - window, window):
+        chunk = frames[offset : offset + window]
+        if PCM_STATS_AUDIOOP in ("peak", "all"):
+            assert _audioop is not None
+            peak = _audioop.max(chunk, 2)
+        else:
+            samples = array.array("h")
+            samples.frombytes(chunk)
+            peak = max(max(samples), -min(samples)) if samples else 0
+        if peak > threshold:
+            onset_bytes = offset
+            break
+    if onset_bytes is None:
+        return wav_bytes
+
+    keep_bytes = int(sample_rate * LEAD_SILENCE_KEEP_MS / 1000) * 2
+    cut_bytes = onset_bytes - keep_bytes
+    if cut_bytes <= 0:
+        return wav_bytes
+
+    out = io.BytesIO()
+    with wave.open(out, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(sample_rate)
+        writer.writeframes(frames[cut_bytes:])
+    return out.getvalue()
+
+
+async def _max_volume_dbfs(audio_bytes: bytes) -> Optional[float]:
+    """Peak dBFS: PCM WAV native; format khác fallback ffmpeg volumedetect."""
+    if not audio_bytes:
+        return None
+    native = await asyncio.to_thread(_wav_peak_dbfs, audio_bytes)
+    if native is not None:
+        return native
+    if not shutil.which(FFMPEG_BIN):
+        return None
+    try:
+        async with _timed_ffmpeg_operation("peak_fallback") as timing:
+            proc = await asyncio.create_subprocess_exec(
+                FFMPEG_BIN, "-hide_banner", "-nostats",
+                "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
+                "-i", "pipe:0", "-af", "volumedetect", "-f", "null", "-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate(audio_bytes)
+            if timing is not None and proc.returncode != 0:
+                timing.failed = True
     except Exception as exc:
         logger.warning("volumedetect failed: %s", exc)
         return None
@@ -1099,8 +1672,8 @@ async def _call_sglang(
         payload["seed"] = seed_override
     if max_new_override is not None:  # reactive KV-fit (retry sau lỗi KV overflow)
         payload["max_new_tokens"] = max_new_override
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        response = await client.post(f"{SGLANG_BASE_URL}/v1/audio/speech", json=payload)
+    client = await _get_sglang_client()
+    response = await client.post(f"{SGLANG_BASE_URL}/v1/audio/speech", json=payload)
 
     if response.status_code >= 400:
         detail = response.text[:500]
@@ -1109,6 +1682,14 @@ async def _call_sglang(
     audio_bytes = _unwrap_sglang_audio(response.content)
     if not audio_bytes:
         raise RuntimeError("SGLang returned empty audio.")
+
+    if (
+        HIGGS_PAUSE_PREFIX
+        and LEAD_SILENCE_KEEP_MS
+        and not _OWN_LEAD_PAUSE_RE.match(chunk_text)
+        and _is_wav(audio_bytes)
+    ):
+        audio_bytes = _trim_lead_silence(audio_bytes)
 
     result = ChunkResult(
         audio_bytes=audio_bytes,
@@ -1325,10 +1906,9 @@ async def _generate_one_chunk(
     job_semaphore: asyncio.Semaphore,
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> ChunkResult:
+    # Per-job permit bọc trọn vòng đời chunk để giới hạn cả WAV đang chờ hậu kỳ trong RAM.
+    # Lane slot chỉ bọc generation (GPU); ffmpeg hậu kỳ có semaphore riêng.
     async with job_semaphore:
-        # Lane slot CHỈ bọc phần generation (SGLang chiếm GPU). Hậu kỳ bên dưới là CPU/ffmpeg
-        # đã có ffmpeg_post_semaphore riêng — bản cũ giữ lane slot qua cả anchor-wait loudnorm
-        # (tới 120s ngồi không) + encode làm lane short 4-slot nghẹt oan (RCA 2026-07-10).
         async with _lane_slot(lane):
             await _mark_job_started(request_id)
             result = await _render_chunk(request_id, chunk_index, text, req, ref, context=context)
@@ -1428,9 +2008,13 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                 job.chunk_paths = output_paths
                 job.chunk_media_type = _media_type_for_format(req.format)
                 job.updated_at = time.time()
+            lane = job.lane if job else _request_lane(req)
+            active_same_lane_jobs = _active_same_lane_job_count(lane)
+            in_flight_limit = _job_in_flight_limit(active_same_lane_jobs, len(req.chunks))
+            if job is not None:
+                job.in_flight_limit = in_flight_limit
 
-        lane = job.lane if job else _request_lane(req)
-        job_semaphore = asyncio.Semaphore(min(MAX_IN_FLIGHT_CHUNKS_PER_JOB, len(req.chunks)))
+        job_semaphore = asyncio.Semaphore(in_flight_limit)
 
         if req.multi_turn:
             # Natural mode: chunks run SEQUENTIALLY, each grounded on the
@@ -1483,7 +2067,11 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                     break
         else:
             tasks = [
-                asyncio.create_task(_generate_one_chunk(request_id, index, text, req, ref, output_paths[index], lane, job_semaphore))
+                asyncio.create_task(
+                    _generate_one_chunk(
+                        request_id, index, text, req, ref, output_paths[index], lane, job_semaphore,
+                    )
+                )
                 for index, text in enumerate(req.chunks)
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1548,6 +2136,8 @@ def _job_payload(job: TTSJob) -> dict[str, Any]:
         "lane": job.lane,
         "format": job.format,
     }
+    if job.in_flight_limit is not None:
+        payload["in_flight_limit"] = job.in_flight_limit
     if job.detail:
         payload["detail"] = job.detail
     # Shared-gain loudnorm: worker đọc từ batch đầu → truyền `ln_measured` cho batch sau của cùng task
@@ -1588,8 +2178,8 @@ async def _job_counts() -> dict[str, int]:
 
 async def _sglang_health() -> tuple[bool, Optional[Any]]:
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{SGLANG_BASE_URL}/health")
+        client = await _get_sglang_client()
+        response = await client.get(f"{SGLANG_BASE_URL}/health", timeout=5.0)
         if response.status_code >= 400:
             return False, {"status_code": response.status_code, "body": response.text[:500]}
         try:
@@ -1674,17 +2264,22 @@ async def _periodic_cleanup() -> None:
 async def startup() -> None:
     global cleanup_task
     _ensure_dirs()
+    await _get_sglang_client()
     cleanup_task = asyncio.create_task(_periodic_cleanup())
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    global sglang_http_client
     if cleanup_task is not None:
         cleanup_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
             pass
+    if sglang_http_client is not None and not sglang_http_client.is_closed:
+        await sglang_http_client.aclose()
+    sglang_http_client = None
 
 
 @app.get("/health")
@@ -1692,31 +2287,49 @@ async def health() -> dict[str, Any]:
     _ensure_dirs()
     sglang_ready, sglang_status = await _sglang_health()
     counts = await _job_counts()
+    soft_reserved_snapshot = (
+        await soft_reserved_lane_admission.snapshot()
+        if LANE_ADMISSION_MODE == "soft_reserved"
+        else None
+    )
     async with outstanding_chunks_lock:
         current_outstanding = outstanding_chunks
-    return {
+    cache_audio_count, cache_transcript_count = _cache_counts_snapshot()
+    payload = {
         "status": "ok",
         "tts_backend_name": TTS_BACKEND_NAME,
         "sglang_ready": sglang_ready,
         "sglang_base_url": SGLANG_BASE_URL,
         "sglang_status": sglang_status,
-        "cache_audio_count": len(list(REF_AUDIO_DIR.glob("*"))),
-        "cache_transcript_count": len(list(TRANSCRIPT_DIR.glob("*.json"))),
+        "cache_audio_count": cache_audio_count,
+        "cache_transcript_count": cache_transcript_count,
         "active_tts_jobs": counts["queued"] + counts["running"],
         "tts_jobs": counts,
         "max_concurrent_chunks": MAX_CONCURRENT_CHUNKS,
+        "lane_admission_mode": LANE_ADMISSION_MODE,
         "short_reserved_chunks": SHORT_RESERVED_CHUNKS,
-        "long_concurrent_chunks": LONG_CONCURRENT_CHUNKS,
+        "long_concurrent_chunks": (
+            MAX_CONCURRENT_CHUNKS
+            if LANE_ADMISSION_MODE == "soft_reserved"
+            else LONG_CONCURRENT_CHUNKS
+        ),
         "short_request_max_chars": SHORT_REQUEST_MAX_CHARS,
         "short_request_max_chunks": SHORT_REQUEST_MAX_CHUNKS,
         "max_in_flight_chunks_per_job": MAX_IN_FLIGHT_CHUNKS_PER_JOB,
+        "max_burst_in_flight_chunks_per_job": MAX_BURST_IN_FLIGHT_CHUNKS_PER_JOB,
+        "max_burst_active_jobs": MAX_BURST_ACTIVE_JOBS,
         "busy_backlog_chunks": BUSY_BACKLOG_CHUNKS,
         "outstanding_chunks": current_outstanding,
         "lane_inflight": dict(lane_inflight),
         "lane_waiting": dict(lane_waiting),
+        "lane_admission_inflight": dict(lane_admission_inflight),
+        "soft_reserved_lane_admission": soft_reserved_snapshot,
         "job_ttl_seconds": JOB_TTL_SECONDS,
         "streamed_job_ttl_seconds": STREAMED_JOB_TTL_SECONDS,
     }
+    if FFMPEG_TIMING_ENABLED:
+        payload["ffmpeg_timing"] = _ffmpeg_timing_snapshot()
+    return payload
 
 
 @app.post("/v1/cache/clear")
@@ -1727,6 +2340,8 @@ async def clear_cache(_: None = Depends(_validate_token)) -> dict[str, str]:
         path.mkdir(parents=True, exist_ok=True)
     async with cache_locks_guard:
         cache_locks.clear()
+    global _cache_counts_at
+    _cache_counts_at = float("-inf")  # /health kế tiếp đếm lại thay vì trả số trước khi xoá
     return {
         "status": "ok",
         "message": "All cached reference audios and transcripts cleared successfully.",

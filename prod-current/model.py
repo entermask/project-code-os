@@ -19,6 +19,7 @@ from sglang_omni.models.higgs_tts.modeling import (
 from sglang_omni.models.higgs_tts.sampler import (
     K_MAX,
     _RAS_WIN,
+    _SAMPLER_TAIL,
     HiggsBatchedSamplerState,
     batched_step,
     batched_step_direct,
@@ -193,6 +194,13 @@ class HiggsTTSModel(nn.Module):
         # runner each step). Init -1 so an empty window never counts as a repeat.
         self._cg_active_recent_codes = torch.full(
             (pool_size, num_codebooks, _RAS_WIN), -1, dtype=torch.long, device=cg_device
+        )
+        # HIGGS_SAMPLER_TAIL: the decode step returns a stride-0 view of this row
+        # instead of a fresh [bs, text_vocab] fp32 zeros. Nothing reads the values
+        # (codes come from the Higgs sampler); the zeros cost a ~78 MB memset per
+        # step at bs 128 and one live tensor per captured CUDA-graph batch size.
+        self._cg_zero_text_logits = torch.zeros(
+            1, text_config.vocab_size, dtype=torch.float32, device=cg_device
         )
 
     def get_input_embeddings(self) -> nn.Embedding:
@@ -375,6 +383,8 @@ class HiggsTTSModel(nn.Module):
         self._cg_active_recent_codes[:batch_size] = new_recent_codes_BNW
         self._cg_codes_BN[:batch_size] = codes_BN
 
+        if _SAMPLER_TAIL:
+            return self._cg_zero_text_logits.expand(batch_size, -1)
         text_vocab_size = self.backbone.config.vocab_size
         return torch.zeros(
             (batch_size, text_vocab_size),
@@ -536,6 +546,9 @@ class HiggsTTSModel(nn.Module):
                 self_weights.append((mapped, tensor))
 
         self.backbone.load_weights(iter(backbone_weights))
+        from sglang_omni.models.higgs_tts.fso_mxfp8 import maybe_enable_fso_mxfp8
+
+        maybe_enable_fso_mxfp8(self.backbone)
 
         own_params = dict(self.named_parameters(remove_duplicate=False))
         for name, tensor in self_weights:

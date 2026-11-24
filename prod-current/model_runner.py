@@ -11,6 +11,7 @@ the graph itself only ever does ``_cg_active_*[:bs]`` slicing — no
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import torch
@@ -24,6 +25,12 @@ from sglang_omni.models.higgs_tts.utils import EOC_ID
 from sglang_omni.scheduling.messages import OutgoingMessage
 
 logger = logging.getLogger(__name__)
+
+# HIGGS_DECODE_NOSYNC=1: fill the decode CG buffers without a host sync (row
+# indices via a pinned non_blocking H2D, sampling params D2D from sampling_info),
+# so an async-lookahead launch no longer waits for the previous step's forward.
+# Same buffer contents as the default path (see _copy_sampling_params_d2d).
+_DECODE_NOSYNC = os.getenv("HIGGS_DECODE_NOSYNC", "0") == "1"
 
 
 class HiggsTTSModelRunner(ModelRunner):
@@ -133,9 +140,17 @@ class HiggsTTSModelRunner(ModelRunner):
 
         rows_py: list[int] = [model.acquire_row(req.request_id) for req in requests]
         rows_py.extend([model._padding_row] * (bs - n_real))
-        model._cg_row_indices[:bs] = torch.tensor(
-            rows_py, dtype=torch.long, device=model._cg_row_indices.device
-        )
+        if _DECODE_NOSYNC:
+            # The caching host allocator keeps the pinned block alive until the
+            # copy has executed, so the temporary can be dropped right away.
+            model._cg_row_indices[:bs].copy_(
+                torch.tensor(rows_py, dtype=torch.long, pin_memory=True),
+                non_blocking=True,
+            )
+        else:
+            model._cg_row_indices[:bs] = torch.tensor(
+                rows_py, dtype=torch.long, device=model._cg_row_indices.device
+            )
 
         if self._async_enabled and is_lookahead and n_real > 0:
             # Async-lookahead overrun guard (GPU-side, no host sync): a request
@@ -156,23 +171,29 @@ class HiggsTTSModelRunner(ModelRunner):
                 done, torch.full_like(rows_t_real, model._padding_row), rows_t_real
             )
 
-        temps, top_ps, top_ks = self._extract_decode_sampling_params(
-            forward_batch, n_real
-        )
-        temps.extend([1.0] * (bs - n_real))
-        top_ps.extend([1.0] * (bs - n_real))
-        model._cg_temperature[:bs] = torch.tensor(
-            temps, dtype=torch.float32, device=model._cg_temperature.device
-        )
-        model._cg_top_p[:bs] = torch.tensor(
-            top_ps, dtype=torch.float32, device=model._cg_top_p.device
-        )
+        if not (
+            _DECODE_NOSYNC
+            and self._copy_sampling_params_d2d(forward_batch, n_real, bs)
+        ):
+            temps, top_ps, top_ks = self._extract_decode_sampling_params(
+                forward_batch, n_real
+            )
+            temps.extend([1.0] * (bs - n_real))
+            top_ps.extend([1.0] * (bs - n_real))
+            model._cg_temperature[:bs] = torch.tensor(
+                temps, dtype=torch.float32, device=model._cg_temperature.device
+            )
+            model._cg_top_p[:bs] = torch.tensor(
+                top_ps, dtype=torch.float32, device=model._cg_top_p.device
+            )
 
-        top_k_vals = [(tk if (tk is not None and tk > 0) else K_MAX) for tk in top_ks]
-        top_k_vals.extend([K_MAX] * (bs - n_real))
-        model._cg_top_k_buf[:bs] = torch.tensor(
-            top_k_vals, dtype=torch.long, device=model._cg_top_k_buf.device
-        )
+            top_k_vals = [
+                (tk if (tk is not None and tk > 0) else K_MAX) for tk in top_ks
+            ]
+            top_k_vals.extend([K_MAX] * (bs - n_real))
+            model._cg_top_k_buf[:bs] = torch.tensor(
+                top_k_vals, dtype=torch.long, device=model._cg_top_k_buf.device
+            )
 
         rows_t = model._cg_row_indices[:bs]
         pool = model._sampler_pool
@@ -181,6 +202,37 @@ class HiggsTTSModelRunner(ModelRunner):
         model._cg_active_generation_done[:bs] = pool.generation_done[rows_t]
         model._cg_active_last_codes[:bs] = pool.last_codes[rows_t]
         model._cg_active_recent_codes[:bs] = pool.recent_codes[rows_t]
+
+    def _copy_sampling_params_d2d(self, forward_batch, n_real: int, bs: int) -> bool:
+        """No-sync twin of ``_extract_decode_sampling_params`` + the host upload:
+        copy sglang's on-device ``sampling_info`` tensors straight into the CG
+        buffers. fp32 temperatures / top_p are copied as-is (the host path
+        round-trips them through Python floats, which is exact); top_k outside
+        ``(0, K_MAX)`` maps to ``K_MAX``; padding rows get 1.0 / 1.0 / K_MAX.
+        Returns False (caller takes the host path) unless sampling_info carries
+        all three tensors for every real row.
+        """
+        model = self.model
+        sampling_info = getattr(forward_batch, "sampling_info", None)
+        if sampling_info is None or n_real == 0:
+            return False
+        src = [
+            getattr(sampling_info, attr, None)
+            for attr in ("temperatures", "top_ps", "top_ks")
+        ]
+        if not all(isinstance(t, torch.Tensor) and t.numel() >= n_real for t in src):
+            return False
+        temps, top_ps, top_ks = (t.reshape(-1)[:n_real] for t in src)
+        model._cg_temperature[:n_real].copy_(temps)
+        model._cg_top_p[:n_real].copy_(top_ps)
+        model._cg_top_k_buf[:n_real].copy_(
+            torch.where((top_ks > 0) & (top_ks < K_MAX), top_ks, K_MAX)
+        )
+        if bs > n_real:
+            model._cg_temperature[n_real:bs].fill_(1.0)
+            model._cg_top_p[n_real:bs].fill_(1.0)
+            model._cg_top_k_buf[n_real:bs].fill_(K_MAX)
+        return True
 
     @staticmethod
     def _extract_decode_sampling_params(forward_batch, n_real: int):
@@ -208,6 +260,44 @@ class HiggsTTSModelRunner(ModelRunner):
                 for t in top_ks_raw[:n_real]
             ]
         return temps, top_ps, top_ks
+
+    @staticmethod
+    def _append_output_code(data: Any, codes_N: torch.Tensor) -> torch.Tensor:
+        try:
+            max_new_tokens = int(data.max_new_tokens)
+            num_codebooks = int(data.num_codebooks)
+            count = int(data.output_code_count)
+            buffer = data.output_code_buffer
+        except AttributeError:
+            codes_cpu = codes_N.detach().cpu().to(torch.long).clone()
+            data.output_codes.append(codes_cpu)
+            return codes_cpu
+
+        if buffer is None:
+            buffer = torch.empty(
+                (max(1, max_new_tokens), num_codebooks),
+                dtype=torch.long,
+                device="cpu",
+            )
+            data.output_code_buffer = buffer
+        elif count >= buffer.shape[0]:
+            new_cap = max(count + 1, buffer.shape[0] * 2)
+            new_buffer = torch.empty(
+                (new_cap, num_codebooks),
+                dtype=torch.long,
+                device="cpu",
+            )
+            new_buffer[:count].copy_(buffer[:count])
+            buffer = new_buffer
+            data.output_code_buffer = buffer
+
+        row = buffer[count]
+        if codes_N.device.type == "cpu" and codes_N.dtype == torch.long:
+            row.copy_(codes_N)
+        else:
+            row.copy_(codes_N.detach().to(device="cpu", dtype=torch.long))
+        data.output_code_count = count + 1
+        return row
 
     def _collect_step_outputs_cg(
         self, result: Any, forward_batch: Any, requests: list
@@ -299,8 +389,7 @@ class HiggsTTSModelRunner(ModelRunner):
             if was_done_cpu[b]:
                 cb0_per_row.append(0)
                 continue
-            codes_N = codes_BN_cpu[b].to(torch.long).clone()
-            data.output_codes.append(codes_N)
+            codes_N = self._append_output_code(data, codes_BN_cpu[b])
             data.generation_done = bool(gen_done_after_cpu[b])
             self._emit_code_chunk(sched_req, codes_N)
             self._mark_sampler_finished(req, data.generation_done)
@@ -376,11 +465,11 @@ class HiggsTTSModelRunner(ModelRunner):
                 cb0_per_row.append(0)
                 continue
             codes_N = codes_log[-1]
-            data.output_codes.append(codes_N.detach().cpu().clone())
+            codes_cpu = self._append_output_code(data, codes_N)
             data.generation_done = bool(model._sampler_pool.generation_done[row].item())
-            self._emit_code_chunk(sched_req, data.output_codes[-1])
+            self._emit_code_chunk(sched_req, codes_cpu)
             self._mark_sampler_finished(req, data.generation_done)
-            cb0_per_row.append(int(codes_N[0].item()))
+            cb0_per_row.append(int(codes_cpu[0].item()))
 
         result.next_token_ids = torch.tensor(
             cb0_per_row,
