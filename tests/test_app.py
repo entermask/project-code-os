@@ -1889,3 +1889,136 @@ def test_quota_fair_share_khong_bao_gio_tra_0(api, monkeypatch):
     monkeypatch.setenv("MAX_CONCURRENT_CHUNKS", "2")
     api = importlib.reload(api)
     assert api._job_in_flight_limit(9999, 50) >= 1
+
+
+# --- Lossless TTS quick-wins (long-poll, lane release before sleep/encode, anchor chunk0, zero-copy WAV) ---
+
+
+@pytest.mark.asyncio
+async def test_long_poll_wakes_immediately_on_chunk_and_ln_measured(client, api):
+    job = api.TTSJob(
+        request_id="lp-job", status="running", created_at=0.0, updated_at=0.0,
+        format="mp3", chunks_total=3,
+    )
+    api.jobs["lp-job"] = job
+
+    async def updater():
+        await asyncio.sleep(0.02)
+        async with api.jobs_lock:
+            job.chunks_completed = 1
+            api._notify_job_waiters(job)
+        await asyncio.sleep(0.02)
+        async with api.jobs_lock:
+            job.ln_measured = dict(LN_M)
+            api._notify_job_waiters(job)
+
+    bg = asyncio.create_task(updater())
+    r1 = await client.get(
+        "/v1/tts/jobs/lp-job?wait_ms=2000&after_completed=0",
+        headers=auth_headers(),
+    )
+    assert r1.status_code == 200
+    assert r1.json()["chunks_completed"] == 1
+
+    r2 = await client.get(
+        "/v1/tts/jobs/lp-job?wait_ms=2000&after_completed=1&wait_for_ln=true",
+        headers=auth_headers(),
+    )
+    assert r2.status_code == 200
+    assert r2.json()["ln_measured"]["i"] == pytest.approx(LN_M["i"])
+
+    r_timeout = await client.get(
+        "/v1/tts/jobs/lp-job?wait_ms=20&after_completed=5",
+        headers=auth_headers(),
+    )
+    assert r_timeout.status_code == 200
+    await bg
+    assert len(job.waiters) == 0
+    api.jobs.pop("lp-job", None)
+
+
+@pytest.mark.asyncio
+async def test_lane_slot_released_before_retry_sleep_and_mp3_encode(api, tmp_path, monkeypatch):
+    lane_during_sleep = []
+    lane_during_encode = []
+    sleeps = []
+    orig_sleep = api.asyncio.sleep
+    calls = {"n": 0}
+
+    async def spy_sleep(seconds):
+        sleeps.append(seconds)
+        lane_during_sleep.append(api.lane_inflight["long"])
+        await orig_sleep(0)
+
+    async def fake_call(chunk_text, req, ref, seed_override=None, **_kwargs):
+        calls["n"] += 1
+        assert api.lane_inflight["long"] == 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient error")
+        return api.ChunkResult(audio_bytes=tone_wav_bytes(), completion_tokens=100)
+
+    async def fake_encode(wav, af=None, af_final=False):
+        lane_during_encode.append(api.lane_inflight["long"])
+        return b"ID3-encoded-mp3"
+
+    monkeypatch.setattr(api.asyncio, "sleep", spy_sleep)
+    monkeypatch.setattr(api, "_call_sglang", fake_call)
+    monkeypatch.setattr(api, "_wav_to_mp3", fake_encode)
+    monkeypatch.setattr(api, "CHUNK_RETRY_BASE_DELAY", 0.05)
+
+    api.jobs["lane-rel-job"] = api.TTSJob(
+        request_id="lane-rel-job", status="queued", created_at=0.0, updated_at=0.0,
+        format="mp3", chunks_total=1, lane="long",
+    )
+    api.outstanding_chunks = 1
+    req = api.TTSRequest(chunks=["hello"], ref_audio_url="https://x/ref.wav", ref_text="ref", format="mp3")
+    ref = api.ReferenceCacheEntry(audio_path=tmp_path / "ref.wav", transcript="ref", audio_cache_hit=True)
+
+    await api._generate_one_chunk(
+        "lane-rel-job", 0, "hello", req, ref, tmp_path / "c0.mp3", "long", asyncio.Semaphore(1),
+    )
+    assert sleeps == [0.05]
+    assert lane_during_sleep == [0]
+    assert lane_during_encode == [0]
+    assert api.lane_inflight["long"] == 0
+    assert (tmp_path / "c0.mp3").read_bytes() == b"ID3-encoded-mp3"
+    api.jobs.pop("lane-rel-job", None)
+
+
+@pytest.mark.asyncio
+async def test_shared_loudnorm_always_anchors_on_chunk0(api, monkeypatch):
+    measured_payloads = []
+
+    async def fake_measure(af, wav):
+        measured_payloads.append(wav[-6:])
+        return dict(LN_M)
+
+    monkeypatch.setattr(api, "_measure_loudnorm", fake_measure)
+    job = _ln_job(api, "job-chunk0-anchor")
+    req = api.TTSRequest(chunks=["chunk0", "chunk1"], ref_audio_url="u", ref_text="t", af_filter=LN_AF)
+
+    w0 = wav_bytes() + b"CHUNK0"
+    w1 = wav_bytes() + b"CHUNK1"
+    # chunk 1 tới TRƯỚC chunk 0 nhưng vẫn phải đợi chunk 0 đo làm anchor
+    t1 = asyncio.create_task(api._shared_loudnorm_af("job-chunk0-anchor", req, w1, chunk_index=1))
+    await asyncio.sleep(0.01)
+    assert len(measured_payloads) == 0
+    t0 = asyncio.create_task(api._shared_loudnorm_af("job-chunk0-anchor", req, w0, chunk_index=0))
+    af1, af0 = await asyncio.gather(t1, t0)
+    assert af0 == af1 and af0 is not None and "volume=14.40dB" in af0
+    assert measured_payloads == [b"CHUNK0"]
+    assert job.ln_measured is not None
+    api.jobs.pop("job-chunk0-anchor", None)
+
+
+def test_zero_copy_wav_view_matches_wave_module_with_extra_chunks(api):
+    raw = tone_wav_bytes()
+    # Chèn LIST chunk ở giữa header và data như ffmpeg hay ghi
+    list_chunk = b"LIST" + (8).to_bytes(4, "little") + b"INFO" + b"test"
+    with_extra = raw[:36] + list_chunk + raw[36:]
+    total_size = len(with_extra) - 8
+    with_extra = b"RIFF" + total_size.to_bytes(4, "little") + with_extra[8:]
+
+    assert api._wav_seconds(with_extra) == pytest.approx(1.0, abs=0.001)
+    assert api._wav_peak_dbfs(with_extra) == pytest.approx(api._wav_peak_dbfs(raw), abs=0.0001)
+    assert api._wav_rms_dbfs(with_extra) == pytest.approx(api._wav_rms_dbfs(raw), abs=0.0001)

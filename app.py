@@ -1,6 +1,7 @@
 import array
 import asyncio
 import base64
+import contextvars
 import hashlib
 import io
 import json
@@ -17,7 +18,7 @@ import uuid
 import wave
 from collections import deque
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
@@ -96,6 +97,7 @@ BUSY_BACKLOG_CHUNKS = max(1, int(os.getenv("BUSY_BACKLOG_CHUNKS", "32")))
 # sẽ được sinh lại tối đa CHUNK_RETRY_ATTEMPTS lần thay vì giết cả job ngay.
 CHUNK_RETRY_ATTEMPTS = max(1, int(os.getenv("CHUNK_RETRY_ATTEMPTS", "3")))
 CHUNK_RETRY_BASE_DELAY = float(os.getenv("CHUNK_RETRY_BASE_DELAY", "1.0"))
+CHUNK_QUALITY_RETRY_DELAY = max(0.0, float(os.getenv("CHUNK_QUALITY_RETRY_DELAY", "0.0")))
 # Audio nhỏ hơn ngưỡng này coi như chunk hỏng (gần-câm/cụt) → retry. 0 = tắt kiểm tra.
 CHUNK_MIN_BYTES = max(0, int(os.getenv("CHUNK_MIN_BYTES", "512")))
 # Higgs đôi khi không emit EOS → tuôn tới max_new_tokens ra audio SIZE HỢP LỆ nhưng CÂM
@@ -212,7 +214,10 @@ SHORT_LOUDNORM_SEC = float(os.getenv("SHORT_LOUDNORM_SEC", "3.0"))
 # Worker có thể gửi sẵn `ln_measured` (đồng bộ gain qua NHIỀU batch/box của cùng 1 task) → bỏ qua đo.
 # Đo fail/timeout → fallback per-chunk pad-cut dynamic (đúng hành vi cũ). Tắt: LOUDNORM_SHARED=off.
 LOUDNORM_SHARED = os.getenv("LOUDNORM_SHARED", "on").strip().lower() not in ("off", "0", "false", "no")
+LOUDNORM_ANCHOR_CHUNK0 = os.getenv("LOUDNORM_ANCHOR_CHUNK0", "on").strip().lower() not in ("off", "0", "false", "no")
 LN_ANCHOR_WAIT_SEC = float(os.getenv("LN_ANCHOR_WAIT_SEC", "120"))
+_LANE_SLOT_CTX: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_lane_slot_ctx", default=None)
+_DEFER_MP3_ENCODE_CTX: contextvars.ContextVar[bool] = contextvars.ContextVar("_defer_mp3_encode_ctx", default=False)
 _ATEMPO_RE = re.compile(r"atempo=([0-9.]+)")
 _LOUDNORM_RE = re.compile(r"loudnorm=[^,]*")
 
@@ -689,9 +694,27 @@ class TTSJob:
     # ln_measured expose qua status để worker thread sang batch sau (xem _shared_loudnorm_af).
     ln_future: Optional[asyncio.Future] = None
     ln_measured: Optional[dict] = None
+    ln_claim_started: bool = False
     # Thời điểm chunk ĐẦU TIÊN acquire được lane slot (job thật sự chạy). None = còn xếp hàng.
     # Expose qua _job_payload để worker watchdog phân biệt "queued" vs "running không tiến".
     started_at: Optional[float] = None
+    waiters: set[asyncio.Event] = field(default_factory=set)
+
+
+def _notify_job_waiters(job: TTSJob) -> None:
+    """Wake any long-poll GET /v1/tts/jobs/{id} waiters; must hold jobs_lock."""
+    for waiter in job.waiters:
+        waiter.set()
+
+
+def _write_atomic(tmp_path: Path, output_path: Path, data: bytes) -> None:
+    try:
+        tmp_path.write_bytes(data)
+        os.replace(tmp_path, output_path)
+    except BaseException:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
 
 def _ensure_dirs() -> None:
@@ -850,6 +873,19 @@ async def _lane_slot(lane: str):
             await _release_soft_reserved_lane_slot(lane)
 
 
+@asynccontextmanager
+async def _maybe_lane_slot(lane: Optional[str], request_id: Optional[str] = None):
+    if not lane:
+        if request_id:
+            await _mark_job_started(request_id)
+        yield
+        return
+    async with _lane_slot(lane):
+        if request_id:
+            await _mark_job_started(request_id)
+        yield
+
+
 def _job_in_flight_limit(active_same_lane_jobs: int, chunks_total: int) -> int:
     """Chọn quota tĩnh khi job bắt đầu; không đánh thức hàng nghìn coroutine khi tải cao.
 
@@ -894,6 +930,7 @@ async def _mark_job_started(request_id: str) -> None:
             job.status = "running"
             job.started_at = time.time()
             job.updated_at = job.started_at
+            _notify_job_waiters(job)
 
 
 def _sha256(value: str) -> str:
@@ -1159,15 +1196,54 @@ def _ln_values_valid(m: Optional[dict]) -> Optional[dict]:
     return vals
 
 
+def _pcm16_wav_view(audio_bytes: bytes) -> Optional[tuple[int, int, memoryview]]:
+    """Zero-copy RIFF/WAVE PCM16 header scan returning (nchannels, sample_rate, pcm_view).
+    Returns None for non-WAV, compressed WAV, or non-16-bit samples (caller falls back to wave.open)."""
+    total = len(audio_bytes)
+    if total < 44 or audio_bytes[:4] != b"RIFF" or audio_bytes[8:12] != b"WAVE":
+        return None
+    mv = memoryview(audio_bytes)
+    pos = 12
+    nchannels: Optional[int] = None
+    sample_rate: Optional[int] = None
+    while pos + 8 <= total:
+        chunk_id = audio_bytes[pos : pos + 4]
+        chunk_size = int.from_bytes(mv[pos + 4 : pos + 8], "little")
+        data_pos = pos + 8
+        if chunk_id == b"fmt ":
+            if chunk_size < 16 or data_pos + 16 > total:
+                return None
+            audio_format = int.from_bytes(mv[data_pos : data_pos + 2], "little")
+            if audio_format != 1:
+                return None
+            nchannels = int.from_bytes(mv[data_pos + 2 : data_pos + 4], "little")
+            sample_rate = int.from_bytes(mv[data_pos + 4 : data_pos + 8], "little")
+            bits_per_sample = int.from_bytes(mv[data_pos + 14 : data_pos + 16], "little")
+            if nchannels < 1 or sample_rate <= 0 or bits_per_sample != 16:
+                return None
+        elif chunk_id == b"data":
+            if nchannels is None or sample_rate is None:
+                return None
+            end_pos = min(total, data_pos + chunk_size)
+            usable = (end_pos - data_pos) - ((end_pos - data_pos) % 2)
+            return nchannels, sample_rate, mv[data_pos : data_pos + usable]
+        pos = data_pos + chunk_size + (chunk_size & 1)
+    return None
+
+
 def _wav_rms_dbfs(wav_bytes: bytes) -> Optional[float]:
     """RMS dBFS của WAV 16-bit (mono/stereo) — screen outlier RẺ (thuần Python, không ffmpeg).
     None nếu không decode được / không phải s16 / câm."""
     try:
-        with wave.open(io.BytesIO(wav_bytes), "rb") as r:
-            if r.getsampwidth() != 2:
-                return None
-            frames = r.readframes(r.getnframes())
-        frames = frames[: len(frames) - (len(frames) % 2)]
+        parsed = _pcm16_wav_view(wav_bytes)
+        if parsed is not None:
+            frames = parsed[2]
+        else:
+            with wave.open(io.BytesIO(wav_bytes), "rb") as r:
+                if r.getsampwidth() != 2:
+                    return None
+                raw_frames = r.readframes(r.getnframes())
+            frames = memoryview(raw_frames)[: len(raw_frames) - (len(raw_frames) % 2)]
         if not frames:
             return None
         if PCM_STATS_AUDIOOP == "all":
@@ -1176,6 +1252,8 @@ def _wav_rms_dbfs(wav_bytes: bytes) -> Optional[float]:
         else:
             samples = array.array("h")
             samples.frombytes(frames)
+            if sys.byteorder != "little":
+                samples.byteswap()
             acc = 0
             for s in samples:
                 acc += s * s
@@ -1255,10 +1333,16 @@ async def _measure_loudnorm(af: str, wav_bytes: bytes) -> Optional[dict]:
         return None
 
 
-async def _shared_loudnorm_af(request_id: str, req: "TTSRequest", wav_bytes: bytes) -> Optional[str]:
+async def _shared_loudnorm_af(
+    request_id: str,
+    req: "TTSRequest",
+    wav_bytes: bytes,
+    *,
+    chunk_index: Optional[int] = None,
+) -> Optional[str]:
     """Trả chain -af đã khoá gain tĩnh chung cho job (linear=true), hoặc None → caller dùng đường cũ
     (per-chunk pad-cut dynamic). Ưu tiên ln_measured worker gửi (đồng bộ qua nhiều batch/box); không có
-    thì chunk ĐẦU claim đo anchor, các chunk khác await (timeout → fallback, không kẹt job)."""
+    thì chunk 0 (khi chunk_index được truyền & nhiều chunk) đo anchor, các chunk khác await (timeout → fallback)."""
     if not LOUDNORM_SHARED or not req.af_filter or "loudnorm" not in req.af_filter:
         return None
 
@@ -1269,8 +1353,12 @@ async def _shared_loudnorm_af(request_id: str, req: "TTSRequest", wav_bytes: byt
             job = jobs.get(request_id)
             if job is not None and job.ln_measured is None:
                 job.ln_measured = m
+                _notify_job_waiters(job)
         return await _shared_or_rescue_af(req.af_filter, m, wav_bytes)
 
+    deterministic_anchor = (
+        LOUDNORM_ANCHOR_CHUNK0 and chunk_index is not None and len(req.chunks) > 1
+    )
     claimed = False
     async with jobs_lock:
         job = jobs.get(request_id)
@@ -1278,8 +1366,10 @@ async def _shared_loudnorm_af(request_id: str, req: "TTSRequest", wav_bytes: byt
             return None
         if job.ln_future is None:
             job.ln_future = asyncio.get_running_loop().create_future()
-            claimed = True
         fut = job.ln_future
+        if not job.ln_claim_started and (not deterministic_anchor or chunk_index == 0):
+            job.ln_claim_started = True
+            claimed = True
 
     if claimed:
         m = None
@@ -1291,13 +1381,14 @@ async def _shared_loudnorm_af(request_id: str, req: "TTSRequest", wav_bytes: byt
                 if rms is not None:
                     m["rms"] = rms
         finally:
+            if m:
+                async with jobs_lock:
+                    job = jobs.get(request_id)
+                    if job is not None:
+                        job.ln_measured = m
+                        _notify_job_waiters(job)
             if not fut.done():
                 fut.set_result(m)
-        if m:
-            async with jobs_lock:
-                job = jobs.get(request_id)
-                if job is not None:
-                    job.ln_measured = m
     else:
         try:
             m = await asyncio.wait_for(asyncio.shield(fut), timeout=LN_ANCHOR_WAIT_SEC)
@@ -1373,6 +1464,10 @@ async def _wav_to_mp3(wav_bytes: bytes, af: Optional[str] = None, af_final: bool
 
 
 def _wav_seconds(wav_bytes: bytes) -> float:
+    parsed = _pcm16_wav_view(wav_bytes)
+    if parsed is not None:
+        nchannels, sample_rate, pcm_view = parsed
+        return len(pcm_view) / float(nchannels * 2 * sample_rate)
     try:
         with wave.open(io.BytesIO(wav_bytes), "rb") as r:
             return r.getnframes() / float(r.getframerate())
@@ -1546,20 +1641,23 @@ def _wav_peak_dbfs(audio_bytes: bytes) -> Optional[float]:
     """Peak dBFS của PCM16 WAV SGLang; None để caller fallback FFmpeg."""
     if not _is_wav(audio_bytes):
         return None
-    try:
-        with wave.open(io.BytesIO(audio_bytes), "rb") as reader:
-            if reader.getcomptype() != "NONE":
-                return None
-            if reader.getsampwidth() != 2:
-                return None
-            frames = reader.readframes(reader.getnframes())
-    except (EOFError, OSError, wave.Error):
-        return None
+    parsed = _pcm16_wav_view(audio_bytes)
+    if parsed is not None:
+        frames: bytes | memoryview = parsed[2]
+    else:
+        try:
+            with wave.open(io.BytesIO(audio_bytes), "rb") as reader:
+                if reader.getcomptype() != "NONE":
+                    return None
+                if reader.getsampwidth() != 2:
+                    return None
+                raw_frames = reader.readframes(reader.getnframes())
+        except (EOFError, OSError, wave.Error):
+            return None
+        if not raw_frames:
+            return None
+        frames = memoryview(raw_frames)[: len(raw_frames) - (len(raw_frames) % 2)]
 
-    if not frames:
-        return None
-
-    frames = frames[:len(frames) - len(frames) % 2]
     if not frames:
         return None
     if PCM_STATS_AUDIOOP in ("peak", "all"):
@@ -1586,14 +1684,21 @@ def _trim_lead_silence(wav_bytes: bytes) -> bytes:
     giờ chạm vào speech; onset < keep (kể cả 0) → trả nguyên bản. Quét bằng cửa sổ
     5ms, mono s16 (định dạng SGLang trả về); format khác → no-op.
     """
-    try:
-        with wave.open(io.BytesIO(wav_bytes), "rb") as reader:
-            if reader.getnchannels() != 1 or reader.getsampwidth() != 2:
-                return wav_bytes
-            sample_rate = reader.getframerate()
-            frames = reader.readframes(reader.getnframes())
-    except (EOFError, OSError, wave.Error):
-        return wav_bytes
+    parsed = _pcm16_wav_view(wav_bytes)
+    if parsed is not None:
+        nchannels, sample_rate, frames_view = parsed
+        if nchannels != 1:
+            return wav_bytes
+        frames: bytes | memoryview = frames_view
+    else:
+        try:
+            with wave.open(io.BytesIO(wav_bytes), "rb") as reader:
+                if reader.getnchannels() != 1 or reader.getsampwidth() != 2:
+                    return wav_bytes
+                sample_rate = reader.getframerate()
+                frames = memoryview(reader.readframes(reader.getnframes()))
+        except (EOFError, OSError, wave.Error):
+            return wav_bytes
 
     window = max(2, int(sample_rate * 0.005) * 2)
     threshold = 32768.0 * (10.0 ** (LEAD_SILENCE_DBFS / 20.0))
@@ -1702,7 +1807,7 @@ async def _call_sglang(
     # Multi-turn (và sub-split force_wav) giữ WAV (re-encode sang req.format khi ghi file / sau khi nối).
     # af_filter (boost-on-bridge) GIỮ WAV ở đây → boost+encode dồn về _generate_one_chunk (quality-check
     # & grounding chạy trên WAV thô như mode wav cũ; tránh encode 2 lần).
-    if not force_wav and not req.multi_turn and not req.af_filter and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
+    if not force_wav and not _DEFER_MP3_ENCODE_CTX.get() and not req.multi_turn and not req.af_filter and req.format == "mp3" and not _is_mp3(result.audio_bytes) and _is_wav(audio_bytes):
         result.audio_bytes = await _wav_to_mp3(audio_bytes)
 
     # Audio rỗng/quá nhỏ = không có audio dùng được → hard-fail để retry (xem _generate_one_chunk).
@@ -1729,14 +1834,14 @@ async def _call_sglang(
         result.quality_issue = "early_eos"
 
     # CHẶN TRÊN (runaway EOS): không emit EOS → chạy tới đúng cap (audio size hợp lệ nhưng đuôi câm).
-    # Chỉ single-turn (context is None): cap động đủ rộng nên chạm cap = runaway thật. Chunk có context
-    # cap bị KV giới hạn → chạm cap có thể là chunk dài hợp lệ, KHÔNG flag (silent runaway vẫn bắt dưới).
+    # Chỉ single-turn (context is None): cap động đủ rộng nên chạm cap = runaway thật (kể cả khi chạm
+    # MAX_NEW_TOKENS_CEIL ở chunk CJK/dài). Chunk có context cap bị KV giới hạn → không flag runaway token.
     if (
         result.quality_issue is None
         and req.max_new_tokens is None
         and context is None
         and isinstance(cap, int)
-        and cap < MAX_NEW_TOKENS_CEIL
+        and cap <= MAX_NEW_TOKENS_CEIL
         and result.completion_tokens >= cap * 0.95
     ):
         result.quality_issue = "runaway"
@@ -1764,6 +1869,7 @@ async def _call_sglang_with_retry(
     max_new_override: Optional[int] = None  # set khi KV overflow → thu nhỏ max_new vừa KV cho retry
     best: Optional[ChunkResult] = None      # ứng viên best-effort (chunk có audio nhưng còn issue)
     best_score = -1.0
+    lane = _LANE_SLOT_CTX.get()
     for attempt in range(1, CHUNK_RETRY_ATTEMPTS + 1):
         # Attempt đầu dùng seed tự nhiên; retry ĐỔI seed (early-EOS/runaway/silent thường là fluke
         # sampling, cùng seed hay lặp lại) + NÂNG max_new lên trần (chunk dài bị cắt có chỗ đọc trọn).
@@ -1771,10 +1877,11 @@ async def _call_sglang_with_retry(
         if attempt > 1 and max_new_override is None:
             max_new_override = _escalated_max_new_tokens(context)
         try:
-            result = await _call_sglang(
-                text, req, ref, seed_override=seed_override, context=context,
-                max_new_override=max_new_override, force_wav=force_wav,
-            )
+            async with _maybe_lane_slot(lane, request_id):
+                result = await _call_sglang(
+                    text, req, ref, seed_override=seed_override, context=context,
+                    max_new_override=max_new_override, force_wav=force_wav,
+                )
         except Exception as exc:
             last_exc = exc
             # KV overflow (input_tokens + max_new_tokens > kv_capacity): đổi seed VÔ DỤNG (deterministic)
@@ -1815,7 +1922,8 @@ async def _call_sglang_with_retry(
                 request_id, chunk_index, attempt, CHUNK_RETRY_ATTEMPTS,
                 result.quality_issue, result.completion_tokens, result.expected_tokens,
             )
-            await asyncio.sleep(CHUNK_RETRY_BASE_DELAY * attempt)
+            if CHUNK_QUALITY_RETRY_DELAY > 0:
+                await asyncio.sleep(CHUNK_QUALITY_RETRY_DELAY)
 
     # Hết lượt mà chưa sạch: trả BEST-EFFORT (worker luôn cần audio cho mọi chunk). Chỉ hard-fail
     # khi KHÔNG có bản nào dùng được (toàn hard-error/undersized) → để worker retry cả job.
@@ -1883,9 +1991,8 @@ async def _render_chunk(
     joined = _wav_concat_all(wavs)
     if joined is None:
         raise RuntimeError(f"sub-split chunk {chunk_index}: nối WAV rỗng (sub-part không decode được)")
-    # Trả ĐÚNG format như đường thường: single-turn mp3 → mp3 (re-encode 1 lần sau khi nối, tránh
-    # artifact biên frame mp3); còn lại giữ WAV (file-write trong _generate_one_chunk lo nốt).
-    if not req.multi_turn and not req.af_filter and req.format == "mp3":
+    # Trả ĐÚNG format như đường thường: single-turn mp3 → mp3 (trừ khi deferred để encode ngoài _lane_slot).
+    if not _DEFER_MP3_ENCODE_CTX.get() and not req.multi_turn and not req.af_filter and req.format == "mp3":
         joined = await _wav_to_mp3(joined)
     return ChunkResult(
         audio_bytes=joined,
@@ -1908,21 +2015,27 @@ async def _generate_one_chunk(
     context: Optional[list[tuple[str, bytes]]] = None,
 ) -> ChunkResult:
     # Per-job permit bọc trọn vòng đời chunk để giới hạn cả WAV đang chờ hậu kỳ trong RAM.
-    # Lane slot chỉ bọc generation (GPU); ffmpeg hậu kỳ có semaphore riêng.
+    # _LANE_SLOT_CTX bảo đảm lane slot CHỈ bọc quanh lượt HTTP gọi SGLang GPU (nhả khi sleep retry
+    # và khi hậu kỳ ffmpeg `_wav_to_mp3` / ghi file).
     async with job_semaphore:
-        async with _lane_slot(lane):
-            await _mark_job_started(request_id)
+        lane_token = _LANE_SLOT_CTX.set(lane)
+        defer_token = _DEFER_MP3_ENCODE_CTX.set(True)
+        try:
             result = await _render_chunk(request_id, chunk_index, text, req, ref, context=context)
+        finally:
+            _DEFER_MP3_ENCODE_CTX.reset(defer_token)
+            _LANE_SLOT_CTX.reset(lane_token)
         # Multi-turn keeps result.audio_bytes as WAV (for the context window);
         # the chunk FILE still needs req.format. Re-encode only for the write.
         file_bytes = result.audio_bytes
-        # af_filter (boost-on-bridge): audio giữ WAV tới đây (guard ở _call_sglang/_render_chunk) →
-        # mọi nhánh vào _wav_to_mp3 với af → MP3 đã boost. Không af: chỉ multi-turn còn WAV cần encode
-        # (single-turn đã mp3 ở _call_sglang) → _is_wav=False, giữ nguyên hành vi cũ.
         if req.format == "mp3" and _is_wav(file_bytes):
-            # Shared-gain loudnorm: khoá 1 gain tĩnh cho cả job (hết bậc "to nhỏ" giữa chunk);
+            # Shared-gain loudnorm: khoá 1 gain tĩnh cho cả job (chunk 0 là anchor khi multi-chunk);
             # None (tắt/đo fail/timeout) → đường cũ per-chunk pad-cut dynamic y nguyên.
-            shared_af = await _shared_loudnorm_af(request_id, req, file_bytes) if req.af_filter else None
+            shared_af = (
+                await _shared_loudnorm_af(request_id, req, file_bytes, chunk_index=chunk_index)
+                if req.af_filter
+                else None
+            )
             if shared_af:
                 file_bytes = await _wav_to_mp3(file_bytes, af=shared_af, af_final=True)
             else:
@@ -1942,15 +2055,9 @@ async def _generate_one_chunk(
                 f"chunk {chunk_index}: refusing to write non-WAV bytes as .wav "
                 f"(head={file_bytes[:8].hex()})"
             )
-        # Ghi atomic: /audio đọc theo exists() nên không được để lộ file ghi dở.
+        # Ghi atomic trong thread pool: không chặn event loop; /audio đọc theo exists().
         tmp_path = output_path.with_name(f"{output_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-        try:
-            tmp_path.write_bytes(file_bytes)
-            os.replace(tmp_path, output_path)
-        except BaseException:
-            if tmp_path.exists():
-                tmp_path.unlink()
-            raise
+        await asyncio.to_thread(_write_atomic, tmp_path, output_path, file_bytes)
 
     await _release_chunks(1)
     async with jobs_lock:
@@ -1964,6 +2071,7 @@ async def _generate_one_chunk(
             job.total_tokens = job.prompt_tokens + job.completion_tokens
             job.engine_time_s += result.engine_time_s
             job.updated_at = time.time()
+            _notify_job_waiters(job)
     return result
 
 
@@ -1979,9 +2087,11 @@ async def _render_anchor(
     tag lật giọng. Trả WAV bytes (multi_turn giữ WAV); KHÔNG ghi file chunk. Có retry
     chống runaway/silent như chunk thường (chunk_index=-1 chỉ để log)."""
     async with job_semaphore:
-        async with _lane_slot(lane):
-            await _mark_job_started(request_id)
+        lane_token = _LANE_SLOT_CTX.set(lane)
+        try:
             result = await _call_sglang_with_retry(request_id, -1, text, req, ref, context=None)
+        finally:
+            _LANE_SLOT_CTX.reset(lane_token)
     return result.audio_bytes
 
 
@@ -2094,6 +2204,7 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                     job.detail = detail
                     job.chunks_failed = len(errors)
                     job.updated_at = time.time()
+                    _notify_job_waiters(job)
             logger.error("TTS job %s failed: %s", request_id, detail)
             return
 
@@ -2108,6 +2219,7 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                 if len(streamed_chunks) >= len(output_paths):
                     job.audio_stream_completed_at = now
                 job.updated_at = now
+                _notify_job_waiters(job)
     except Exception as exc:
         remaining = len(req.chunks) - completed_outputs
         if remaining > 0:
@@ -2119,6 +2231,7 @@ async def _run_tts_job(request_id: str, req: TTSRequest) -> None:
                 job.detail = str(exc)
                 job.chunks_failed = max(job.chunks_failed, remaining)
                 job.updated_at = time.time()
+                _notify_job_waiters(job)
         logger.exception("TTS job %s failed", request_id)
 
 
@@ -2250,7 +2363,7 @@ async def _cleanup_expired_jobs() -> None:
         for path in job.cleanup_paths or []:
             try:
                 if path.is_dir():
-                    shutil.rmtree(path)
+                    await asyncio.to_thread(shutil.rmtree, path)
                 elif path.exists():
                     path.unlink()
             except OSError as exc:
@@ -2375,7 +2488,7 @@ async def health() -> dict[str, Any]:
 async def clear_cache(_: None = Depends(_validate_token)) -> dict[str, str]:
     for path in (REF_AUDIO_DIR, TRANSCRIPT_DIR):
         if path.exists():
-            shutil.rmtree(path)
+            await asyncio.to_thread(shutil.rmtree, path)
         path.mkdir(parents=True, exist_ok=True)
     async with cache_locks_guard:
         cache_locks.clear()
@@ -2446,13 +2559,54 @@ async def submit_tts(
 @app.get("/v1/tts/jobs/{request_id}")
 async def get_tts_job(
     request_id: str,
+    wait_ms: int = Query(0, ge=0, le=30000),
+    after_completed: Optional[int] = Query(None, ge=0),
+    wait_for_ln: bool = Query(False),
     _: None = Depends(_validate_token),
 ) -> JSONResponse:
-    async with jobs_lock:
-        job = jobs.get(request_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="TTS job not found.")
-        return JSONResponse(content=_job_payload(job))
+    deadline = time.monotonic() + (wait_ms / 1000.0) if wait_ms > 0 else 0.0
+    init_completed: Optional[int] = None
+    init_status: Optional[str] = None
+    while True:
+        waiter: Optional[asyncio.Event] = None
+        async with jobs_lock:
+            job = jobs.get(request_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="TTS job not found.")
+            if init_completed is None:
+                init_completed = job.chunks_completed
+                init_status = job.status
+            ready = (
+                wait_ms <= 0
+                or job.status in {"succeeded", "failed"}
+                or (after_completed is not None and job.chunks_completed > after_completed)
+                or (wait_for_ln and job.ln_measured is not None)
+                or (
+                    after_completed is None
+                    and not wait_for_ln
+                    and (job.chunks_completed > init_completed or job.status != init_status)
+                )
+            )
+            if ready:
+                return JSONResponse(content=_job_payload(job))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return JSONResponse(content=_job_payload(job))
+            waiter = asyncio.Event()
+            job.waiters.add(waiter)
+        try:
+            await asyncio.wait_for(waiter.wait(), timeout=remaining)
+        except asyncio.TimeoutError:
+            async with jobs_lock:
+                if waiter in job.waiters:
+                    job.waiters.discard(waiter)
+                cur = jobs.get(request_id)
+                if cur is None:
+                    raise HTTPException(status_code=404, detail="TTS job not found.")
+                return JSONResponse(content=_job_payload(cur))
+        finally:
+            async with jobs_lock:
+                job.waiters.discard(waiter)
 
 
 @app.get("/v1/tts/jobs/{request_id}/audio")
