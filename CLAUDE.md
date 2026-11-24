@@ -32,13 +32,12 @@ discipline (principles 2 & 3 below) the single most important thing here.
    "write a repro test, then make it green". For multi-step work, state a brief plan
    with a verify step each. Before done: `pytest` (tests in `tests/`) must pass.
 
-## gstack skills (chỉ Claude Code)
+## Review tooling (chỉ Claude Code)
 
-> Cài global ở `~/.claude/skills/gstack` (slash command, telemetry OFF). Repo Python (FastAPI) + deploy scp → fit thấp; chỉ dùng eng skill ngôn-ngữ-trung-lập.
+> gstack đã gỡ bỏ 21/08/2026. Còn lại: built-in slash command + plugin `codex@openai-codex` (repo `openai/codex-plugin-cc`).
 
-- `/investigate` — root-cause cho lỗi chunk/timeout/auth trong `app.py`.
-- `/cso` — review bảo mật (có auth + reference-audio cache).
-- `/review` — bug review (lưu ý trùng built-in `/code-review`).
-- `/spec`, `/learn`, `/document-*`.
+- `/code-review` — bug review trên diff hiện tại.
+- `/security-review` — review bảo mật (có auth + reference-audio cache). Đừng chạy chung một diff với `/code-review`.
+- `/codex:review`, `/codex:adversarial-review` — second opinion từ Codex CLI.
 
-KHÔNG dùng: `/qa`, `/browse`, `/design-*`, `/benchmark`, `/ios-*` (no UI); `/ship`, `/land-and-deploy`, `/canary` (deploy = scp lên box GPU, không git/CI).
+Deploy vẫn là scp lên box GPU (không git/CI) — không có slash command nào tự deploy.
