@@ -601,6 +601,7 @@ jobs_lock = asyncio.Lock()
 outstanding_chunks = 0
 outstanding_chunks_lock = asyncio.Lock()
 cleanup_task: Optional[asyncio.Task] = None
+sglang_probe_task: Optional[asyncio.Task] = None
 sglang_http_client: Optional[httpx.AsyncClient] = None
 sglang_http_client_lock = asyncio.Lock()
 
@@ -2176,18 +2177,53 @@ async def _job_counts() -> dict[str, int]:
         }
 
 
+# Engine chết/sai cổng mà wrapper vẫn nhận job (202) thì job chỉ fail sau vài giây — 01/11/2026 hai box
+# nhận ~3.400 job fail trong 8-12h. Quan sát engine (probe nền mỗi SGLANG_READY_PROBE_SECONDS + mỗi lần
+# /health) báo CHẮC CHẮN không chạy (lỗi kết nối / HTTP lỗi) thì POST /v1/tts trả 429 retryable để worker
+# chuyển bridge ngay. Probe chỉ timeout = engine bận, không đổi quan sát. Quan sát quá cũ → không chặn.
+SGLANG_NOT_READY_REJECT_SECONDS = float(os.getenv("SGLANG_NOT_READY_REJECT_SECONDS", "30"))
+SGLANG_READY_PROBE_SECONDS = float(os.getenv("SGLANG_READY_PROBE_SECONDS", "5"))
+_sglang_ready_observed: Optional[tuple[float, bool]] = None
+
+
+def _observe_sglang_ready(started_at: float, ready: bool) -> None:
+    global _sglang_ready_observed
+    # Probe bắt đầu sớm mà xong muộn không được ghi đè quan sát mới hơn.
+    if _sglang_ready_observed is None or started_at >= _sglang_ready_observed[0]:
+        _sglang_ready_observed = (started_at, ready)
+
+
+def _sglang_recently_not_ready() -> bool:
+    if _sglang_ready_observed is None:
+        return False
+    observed_at, ready = _sglang_ready_observed
+    return not ready and time.monotonic() - observed_at <= SGLANG_NOT_READY_REJECT_SECONDS
+
+
 async def _sglang_health() -> tuple[bool, Optional[Any]]:
+    started_at = time.monotonic()
     try:
         client = await _get_sglang_client()
         response = await client.get(f"{SGLANG_BASE_URL}/health", timeout=5.0)
         if response.status_code >= 400:
+            _observe_sglang_ready(started_at, False)
             return False, {"status_code": response.status_code, "body": response.text[:500]}
+        _observe_sglang_ready(started_at, True)
         try:
             return True, response.json()
         except ValueError:
             return True, response.text[:500]
-    except Exception as exc:
+    except httpx.TimeoutException as exc:
         return False, str(exc)
+    except Exception as exc:
+        _observe_sglang_ready(started_at, False)
+        return False, str(exc)
+
+
+async def _periodic_sglang_probe() -> None:
+    while True:
+        await _sglang_health()
+        await asyncio.sleep(SGLANG_READY_PROBE_SECONDS)
 
 
 async def _cleanup_expired_jobs() -> None:
@@ -2262,19 +2298,22 @@ async def _periodic_cleanup() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
-    global cleanup_task
+    global cleanup_task, sglang_probe_task
     _ensure_dirs()
     await _get_sglang_client()
     cleanup_task = asyncio.create_task(_periodic_cleanup())
+    sglang_probe_task = asyncio.create_task(_periodic_sglang_probe())
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
     global sglang_http_client
-    if cleanup_task is not None:
-        cleanup_task.cancel()
+    for task in (cleanup_task, sglang_probe_task):
+        if task is None:
+            continue
+        task.cancel()
         try:
-            await cleanup_task
+            await task
         except asyncio.CancelledError:
             pass
     if sglang_http_client is not None and not sglang_http_client.is_closed:
@@ -2356,6 +2395,12 @@ async def submit_tts(
 ) -> JSONResponse:
     _ensure_dirs()
     _validate_request(req)
+    if _sglang_recently_not_ready():
+        raise HTTPException(
+            status_code=429,
+            detail="SGLang engine is not ready on this bridge; retry on another bridge.",
+            headers={"Retry-After": "1", "X-Bridge-Not-Ready": "1"},
+        )
     reserved, current_outstanding = await _try_reserve_chunks(len(req.chunks))
     if not reserved:
         raise HTTPException(

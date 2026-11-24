@@ -11,6 +11,22 @@ if ! command -v sgl-omni >/dev/null 2>&1; then
   exit 1
 fi
 
+# sgl-omni thay port bi chiem bang port ngau nhien ma KHONG bao loi -> wrapper goi
+# SGLANG_PORT khong bao gio thay engine. supervisord restart higgs_sglang ngay sau
+# crash, luc port con TIME_WAIT (~60s) -> 31/10-01/11 hai box chet lam sang 8-12h.
+# Cho toi khi bind kieu vanilla duoc (dung kieu kiem tra cua sgl-omni); het han
+# thi thoat loi de supervisord thu lai, khong bao gio chay tren port khac.
+port_wait_seconds="${SGLANG_PORT_WAIT_SECONDS:-180}"
+port_deadline=$((SECONDS + port_wait_seconds))
+until python3 -c 'import socket, sys; s = socket.socket(); s.bind((sys.argv[1], int(sys.argv[2]))); s.close()' \
+    "$SGLANG_HOST" "$SGLANG_PORT" 2>/dev/null; do
+  if (( SECONDS >= port_deadline )); then
+    echo "port $SGLANG_HOST:$SGLANG_PORT still busy after ${port_wait_seconds}s; refusing to start sgl-omni on a random port" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
 args=(
   serve
   --model-path "$MODEL_PATH"

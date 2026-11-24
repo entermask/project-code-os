@@ -109,6 +109,84 @@ async def test_auth_required(client):
     assert response.status_code == 401
 
 
+class FakeSglangHealthClient:
+    """Thay httpx client tới SGLang: "refused" như engine nhảy cổng (01/11/2026), "timeout" như engine bận."""
+
+    def __init__(self) -> None:
+        self.mode = "ok"
+
+    async def get(self, url, timeout=None):
+        if self.mode == "refused":
+            raise httpx.ConnectError("All connection attempts failed")
+        if self.mode == "timeout":
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(200, json={"status": "healthy"})
+
+
+@pytest.fixture()
+def sglang_probe(api, monkeypatch):
+    fake = FakeSglangHealthClient()
+
+    async def get_client():
+        return fake
+
+    monkeypatch.setattr(api, "_get_sglang_client", get_client)
+    return fake
+
+
+TTS_BODY = {"chunks": ["hello"], "ref_audio_url": "https://example.com/ref.wav", "ref_text": "reference transcript"}
+
+
+@pytest.mark.asyncio
+async def test_submit_rejected_with_retryable_429_while_engine_not_ready(client, api, sglang_probe):
+    """01/11/2026: engine chết/sai cổng mà vẫn nhận 202 → job fail sau vài giây. Engine không nghe thì
+    POST trả 429 để worker chuyển bridge; engine nghe lại thì nhận như thường."""
+    # Chưa có quan sát nào → giữ hành vi cũ, nhận job.
+    assert (await client.post("/v1/tts", headers=auth_headers(), json=TTS_BODY)).status_code == 202
+
+    sglang_probe.mode = "refused"
+    assert (await client.get("/health")).json()["sglang_ready"] is False
+    rejected = await client.post("/v1/tts", headers=auth_headers(), json=TTS_BODY)
+    assert rejected.status_code == 429
+    assert rejected.headers["retry-after"] == "1"
+    assert rejected.headers["x-bridge-not-ready"] == "1"
+
+    sglang_probe.mode = "ok"
+    await api._sglang_health()  # probe nền
+    assert (await client.post("/v1/tts", headers=auth_headers(), json=TTS_BODY)).status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_probe_timeout_means_busy_not_dead(client, api, sglang_probe):
+    """Engine bận làm probe timeout → không được tự chặn job (bridge sống duy nhất sẽ từ chối cả cụm)."""
+    await api._sglang_health()
+    sglang_probe.mode = "timeout"
+    assert (await client.get("/health")).json()["sglang_ready"] is False
+    assert (await client.post("/v1/tts", headers=auth_headers(), json=TTS_BODY)).status_code == 202
+
+    # Đang chết chắc mà probe chuyển sang timeout → chưa biết đã hồi, vẫn chặn.
+    sglang_probe.mode = "refused"
+    await api._sglang_health()
+    sglang_probe.mode = "timeout"
+    await api._sglang_health()
+    assert (await client.post("/v1/tts", headers=auth_headers(), json=TTS_BODY)).status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_stale_not_ready_observation_does_not_block_submit(client, api, sglang_probe):
+    sglang_probe.mode = "refused"
+    await api._sglang_health()
+    observed_at, ready = api._sglang_ready_observed
+    api._sglang_ready_observed = (observed_at - api.SGLANG_NOT_READY_REJECT_SECONDS - 1, ready)
+    assert (await client.post("/v1/tts", headers=auth_headers(), json=TTS_BODY)).status_code == 202
+
+
+def test_slow_probe_result_does_not_override_newer_observation(api):
+    api._observe_sglang_ready(10.0, True)
+    api._observe_sglang_ready(5.0, False)  # probe bắt đầu ở t=5 nhưng xong sau probe t=10
+    assert api._sglang_ready_observed == (10.0, True)
+
+
 @pytest.mark.asyncio
 async def test_validate_required_ref_text(client):
     response = await client.post(
